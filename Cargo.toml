@@ -1,0 +1,20 @@
+[package]
+name = "chatdelta-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line interface for ChatDelta - a unified tool for querying multiple AI APIs"
+license = "MIT"
+repository = "https://github.com/ChatDelta/chatdelta"
+keywords = ["ai", "cli", "openai", "gemini", "claude"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "chatdelta"
+path = "src/main.rs"
+
+[dependencies]
+chatdelta = { path = "../chatdelta-rs" }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
