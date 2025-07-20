@@ -13,7 +13,7 @@ name = "chatdelta"
 path = "src/main.rs"
 
 [dependencies]
-chatdelta = { path = "../chatdelta-rs", version = "0.2.0" }
+chatdelta = "0.2.0"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
