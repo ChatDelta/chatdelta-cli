@@ -14,6 +14,26 @@ pub struct Args {
     #[arg(long, short)]
     pub log: Option<PathBuf>,
 
+    /// Log directory for structured logging (default: ~/.chatdelta/logs)
+    #[arg(long)]
+    pub log_dir: Option<PathBuf>,
+
+    /// Log format: simple, json, structured
+    #[arg(long, default_value = "simple")]
+    pub log_format: String,
+
+    /// Enable performance metrics logging
+    #[arg(long)]
+    pub log_metrics: bool,
+
+    /// Enable detailed error logging
+    #[arg(long)]
+    pub log_errors: bool,
+
+    /// Log session ID for tracking related interactions
+    #[arg(long)]
+    pub session_id: Option<String>,
+
     /// Verbose output - show detailed progress and API responses
     #[arg(long, short)]
     pub verbose: bool,
@@ -95,6 +115,10 @@ impl Args {
 
         if !matches!(self.format.as_str(), "text" | "json" | "markdown") {
             return Err("Output format must be one of: text, json, markdown".to_string());
+        }
+
+        if !matches!(self.log_format.as_str(), "simple" | "json" | "structured") {
+            return Err("Log format must be one of: simple, json, structured".to_string());
         }
 
         if !self.only.is_empty() && !self.exclude.is_empty() {

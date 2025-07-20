@@ -11,9 +11,11 @@ use std::time::Duration;
 
 mod cli;
 mod output;
+mod logging;
 
 use cli::Args;
 use output::{output_results, log_interaction};
+use logging::Logger;
 
 /// Main application logic
 async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
@@ -33,13 +35,17 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         return test_connections(&args).await;
     }
 
-    // Create client configuration
-    let config = ClientConfig {
-        timeout: Duration::from_secs(args.timeout),
-        retries: args.retries,
-        temperature: args.temperature,
-        max_tokens: Some(args.max_tokens),
-    };
+    // Create client configuration using the builder pattern from chatdelta 0.2.0
+    let mut config_builder = ClientConfig::builder()
+        .timeout(Duration::from_secs(args.timeout))
+        .retries(args.retries)
+        .max_tokens(args.max_tokens);
+    
+    if let Some(temp) = args.temperature {
+        config_builder = config_builder.temperature(temp);
+    }
+    
+    let config = config_builder.build();
 
     // Create AI clients based on available API keys and user selection
     let mut clients: Vec<Box<dyn AiClient>> = Vec::new();
@@ -93,13 +99,28 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         return Err("No AI clients available. Check your API keys and --only/--exclude settings.".into());
     }
 
+    // Initialize comprehensive logger
+    let mut logger = if args.log_metrics || args.log_errors || args.log_dir.is_some() {
+        Some(Logger::new(&args)?)
+    } else {
+        None
+    };
+
     // Query each model with the same prompt in parallel
     if !args.quiet {
         println!("Querying {} AI model{}...", clients.len(), if clients.len() == 1 { "" } else { "s" });
     }
     
     let prompt = args.prompt.as_ref().unwrap();
+    
+    // Start logging interaction
+    if let Some(ref mut logger) = logger {
+        logger.start_interaction(prompt);
+    }
+    
+    let query_start = std::time::Instant::now();
     let results = execute_parallel(clients, prompt).await;
+    let query_duration = query_start.elapsed();
     
     let mut responses = Vec::new();
     
@@ -109,11 +130,23 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 if args.verbose {
                     println!("✓ Received response from {}", name);
                 }
+                
+                // Log successful response
+                if let Some(ref mut logger) = logger {
+                    logger.log_model_response(&name, Ok(&reply), query_duration, None);
+                }
+                
                 responses.push((name, reply));
             }
             Err(e) => {
                 if !args.quiet {
                     eprintln!("✗ {} error: {}", name, e);
+                }
+                
+                // Log error
+                if let Some(ref mut logger) = logger {
+                    logger.log_model_response(&name, Err(&e.to_string()), query_duration, None);
+                    logger.log_error(&name, "API_ERROR", &e.to_string(), None);
                 }
             }
         }
@@ -128,10 +161,12 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Generate summary if requested and we have multiple responses
-    let digest = if !args.no_summary && responses.len() > 1 {
+    let (digest, summary_duration) = if !args.no_summary && responses.len() > 1 {
         if !args.quiet {
             println!("Generating summary...");
         }
+        
+        let summary_start = std::time::Instant::now();
         
         // Use Gemini for summary if available, otherwise use the first client
         let summary_client = if let Ok(key) = env::var("GEMINI_API_KEY") {
@@ -143,30 +178,55 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(client) = summary_client {
             match generate_summary(&*client, &responses).await {
                 Ok(summary) => {
+                    let duration = summary_start.elapsed();
                     if !args.quiet {
                         println!("✓ Summary generated");
                     }
-                    Some(summary)
+                    
+                    // Log summary
+                    if let Some(ref mut logger) = logger {
+                        logger.set_summary(&summary);
+                    }
+                    
+                    (Some(summary), Some(duration))
                 }
                 Err(e) => {
                     if !args.quiet {
                         eprintln!("Warning: Summary generation failed: {}", e);
                     }
-                    None
+                    
+                    // Log summary error
+                    if let Some(ref mut logger) = logger {
+                        logger.log_error("summary", "GENERATION_ERROR", &e.to_string(), None);
+                    }
+                    
+                    (None, None)
                 }
             }
         } else {
-            None
+            (None, None)
         }
     } else {
-        None
+        (None, None)
     };
 
     // Output results
     output_results(&args, &responses, digest.as_deref())?;
     
-    // Log interaction if requested
+    // Log interaction if requested (legacy simple logging)
     log_interaction(&args, &responses, digest.as_deref())?;
+    
+    // Finalize comprehensive logging
+    if let Some(mut logger) = logger {
+        logger.finalize_interaction(summary_duration)?;
+        
+        if !args.quiet && (args.log_metrics || args.log_errors || args.log_dir.is_some()) {
+            if let Ok(stats) = logger.get_log_stats() {
+                println!("✓ Logged to structured logs ({} files, {})", 
+                    stats.total_files, stats.size_human_readable());
+            }
+        }
+    }
 
     Ok(())
 }
@@ -181,12 +241,16 @@ fn print_available_models() {
 
 /// Test API connections
 async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let config = ClientConfig {
-        timeout: Duration::from_secs(args.timeout),
-        retries: 0, // No retries for tests
-        temperature: args.temperature,
-        max_tokens: Some(args.max_tokens),
-    };
+    let mut config_builder = ClientConfig::builder()
+        .timeout(Duration::from_secs(args.timeout))
+        .retries(0) // No retries for tests
+        .max_tokens(args.max_tokens);
+    
+    if let Some(temp) = args.temperature {
+        config_builder = config_builder.temperature(temp);
+    }
+    
+    let config = config_builder.build();
     
     let test_prompt = "Hello, please respond with just 'OK' to confirm you're working.";
     let mut all_passed = true;
