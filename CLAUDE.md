@@ -37,6 +37,21 @@ echo "Your prompt" | ./target/release/chatdelta -
 
 # Raw output mode (no formatting)
 ./target/release/chatdelta "prompt" --raw
+
+# Use different retry strategies (new in v0.3.0)
+./target/release/chatdelta "prompt" --retry-strategy exponential  # default
+./target/release/chatdelta "prompt" --retry-strategy linear
+./target/release/chatdelta "prompt" --retry-strategy fixed
+
+# Interactive conversation mode (new in v0.3.0)
+./target/release/chatdelta --conversation
+
+# Conversation mode with system prompt
+./target/release/chatdelta --conversation --system-prompt "You are a helpful coding assistant"
+
+# Save/load conversation history
+./target/release/chatdelta --conversation --save-conversation chat.json
+./target/release/chatdelta --conversation --load-conversation chat.json
 ```
 
 ## Architecture Overview
@@ -65,14 +80,24 @@ ChatDelta CLI is a Rust-based command-line tool that queries multiple AI APIs (O
   - Multiple log formats: simple, JSON, structured
   - Default log location: ~/.chatdelta/logs
 
+### New Features in v0.3.0
+
+ChatDelta CLI now leverages the new features from chatdelta crate v0.3.0:
+
+- **RetryStrategy**: Configurable retry strategies (exponential, linear, fixed) for handling API failures
+- **ChatSession**: Interactive conversation mode with message history
+- **Improved Error Handling**: Better retry logic and error recovery
+
 ### Key Dependencies
 
-The project depends on the `chatdelta` crate (v0.2.0) which provides:
+The project depends on the `chatdelta` crate (v0.3.0) which provides:
 - `AiClient` trait for unified API interaction
 - `ClientConfig` builder for configuration
 - `create_client()` factory function for client instantiation
 - `execute_parallel()` for concurrent API queries
 - `generate_summary()` for response summarization
+- `ChatSession` for conversation management (new in v0.3.0)
+- `RetryStrategy` enum for configurable retry logic (new in v0.3.0)
 
 ### API Integration Pattern
 

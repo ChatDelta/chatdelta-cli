@@ -1,159 +1,159 @@
-# ChatDelta Crate Wishlist
+# ChatDelta Crate Wishlist & Implementation Status
 
-This document contains feature requests and improvements for the `chatdelta` crate based on experience building the CLI tool.
+*Last Updated: After integrating chatdelta v0.3.0*
 
-## High Priority Features
+## 🎉 Successfully Implemented in v0.3.0
 
-### 1. Streaming Response Support
-- **Need**: Ability to stream responses as they arrive rather than waiting for complete responses
-- **API**: Add `send_prompt_streaming()` method that returns a Stream/AsyncIterator
-- **Benefit**: Better user experience for long responses, ability to show progress
+Thank you for implementing these features! They're working great in the CLI:
 
-### 2. Token Usage Reporting
-- **Need**: Consistent token usage reporting across all AI providers
-- **API**: Include `tokens_used` field in responses or as metadata
-- **Benefit**: Cost tracking, usage optimization, better metrics
+### ✅ RetryStrategy (Wishlist #6)
+- **Status**: Fully implemented and integrated
+- **What we got**: `RetryStrategy::Exponential(Duration)`, `Linear(Duration)`, `Fixed(Duration)`
+- **CLI Integration**: Added `--retry-strategy` flag allowing users to choose strategy
+- **Feedback**: Works perfectly! The Duration parameter for base delay is intuitive
 
-### 3. Conversation/Chat Support
-- **Need**: Support for multi-turn conversations with message history
-- **API**: Add `ChatSession` struct with `add_message()` and `send_messages()` methods
-- **Benefit**: Enable chatbot-style interactions, maintain context across queries
+### ✅ ChatSession (Wishlist #3) 
+- **Status**: Partially implemented
+- **What we got**: `ChatSession::new(client)` and `session.send(message)` 
+- **CLI Integration**: Added `--conversation` mode for interactive chat
+- **Current Limitations**: 
+  - Can't extract client from session for resetting
+  - No built-in serialization for saving/loading history
+  - No apparent methods for accessing conversation history
+- **Suggestions for v0.4.0**:
+  ```rust
+  impl ChatSession {
+      pub fn clear(&mut self) // Reset history keeping same client
+      pub fn get_history(&self) -> &[Message] // Access messages
+      pub fn load_history(&mut self, messages: Vec<Message>)
+      pub fn set_system_prompt(&mut self, prompt: &str)
+  }
+  ```
 
-### 4. System Prompt Support
-- **Need**: Ability to set system prompts for models that support them
-- **API**: Add `system_prompt` field to `ClientConfig` or separate method
-- **Benefit**: Better control over model behavior and response style
+## 🚀 High Priority for Next Release (v0.4.0)
 
-## Medium Priority Features
+Based on real-world CLI usage, these would have the most impact:
 
-### 5. Custom API Endpoints
-- **Need**: Support for alternative API endpoints (Azure OpenAI, local models, proxies)
-- **API**: Add `base_url` parameter to `create_client()` or `ClientConfig`
-- **Benefit**: Enterprise deployments, privacy-conscious users, development/testing
+### 1. Streaming Response Support ⭐⭐⭐⭐⭐
+- **Current Pain Point**: Users wait with no feedback for long responses
+- **Ideal API**:
+  ```rust
+  async fn send_prompt_streaming(&self, prompt: &str) -> Result<impl Stream<Item = Result<String>>>
+  ```
+- **CLI Use Case**: Show responses as they arrive, much better UX
 
-### 6. Retry Strategy Customization
-- **Need**: More control over retry behavior (exponential backoff, jitter, specific error handling)
-- **API**: Add `RetryStrategy` enum with options like `Exponential`, `Linear`, `Fixed`
-- **Benefit**: Better handling of rate limits and transient failures
+### 2. Response Metadata ⭐⭐⭐⭐⭐
+- **Current Pain Point**: Can't access token usage, model info, or finish reasons
+- **Ideal API**:
+  ```rust
+  pub struct Response {
+      pub content: String,
+      pub tokens_used: Option<TokenUsage>,
+      pub model: String,
+      pub finish_reason: Option<String>,
+  }
+  ```
+- **CLI Use Case**: Track costs, show usage stats, handle different finish reasons
 
-### 7. Response Metadata
-- **Need**: Access to response metadata (model version used, finish reason, safety ratings)
-- **API**: Return `Response` struct with `content` and `metadata` fields instead of just String
-- **Benefit**: Better debugging, safety monitoring, understanding model behavior
+### 3. System Prompt Support ⭐⭐⭐⭐
+- **Current State**: No way to set system prompts
+- **Ideal API**: 
+  ```rust
+  ClientConfig::builder().system_prompt("You are...")
+  // OR
+  client.set_system_prompt("You are...")
+  ```
+- **CLI Use Case**: Already have `--system-prompt` flag ready to use
 
-### 8. Model Capability Discovery
-- **Need**: Programmatic way to discover model capabilities (max tokens, supports streaming, etc.)
-- **API**: Add `get_model_info()` or `capabilities()` method to `AiClient`
-- **Benefit**: Dynamic UI generation, automatic fallback selection
+## 📊 Medium Priority Features
 
-## Lower Priority Features
+### 4. Better Error Types ⭐⭐⭐
+- **Current Issue**: String errors make it hard to handle specific cases
+- **Ideal Solution**:
+  ```rust
+  pub enum ChatDeltaError {
+      RateLimited { retry_after: Option<Duration> },
+      InvalidApiKey,
+      ModelNotFound(String),
+      NetworkError(String),
+      // etc.
+  }
+  ```
 
-### 9. Request Cancellation
-- **Need**: Ability to cancel in-flight requests
-- **API**: Return `CancellableRequest` with `abort()` method
-- **Benefit**: Better resource management, user control
+### 5. Model Capability Discovery ⭐⭐⭐
+- **Use Case**: Dynamically adjust parameters based on model
+- **Ideal API**:
+  ```rust
+  client.get_capabilities() -> ModelCapabilities {
+      max_tokens: usize,
+      supports_streaming: bool,
+      supports_functions: bool,
+      // etc.
+  }
+  ```
 
-### 10. Batch Processing
-- **Need**: Efficient processing of multiple prompts
-- **API**: Add `send_batch()` method that optimizes multiple requests
-- **Benefit**: Better performance for bulk operations
+### 6. Custom API Endpoints ⭐⭐⭐
+- **Use Case**: Azure OpenAI, local models, proxies
+- **Current Workaround**: None
+- **Ideal**: `create_client("openai", key, model, config, Some(base_url))`
 
-### 11. Response Caching
-- **Need**: Optional caching of responses for identical prompts
-- **API**: Add `enable_cache()` to `ClientConfig` with TTL settings
-- **Benefit**: Cost savings, faster responses for repeated queries
+## 💭 Lower Priority (Nice to Have)
 
-### 12. Fine-tuned Model Support
-- **Need**: Support for custom/fine-tuned models
-- **API**: Accept full model IDs/paths in `create_client()`
-- **Benefit**: Support specialized use cases
+### 7. Progress Callbacks
+- For long operations, ability to show progress
 
-## API Improvements
+### 8. Request Cancellation  
+- Ability to abort in-flight requests
 
-### 13. Better Error Types
-- **Need**: More specific error types for different failure modes
-- **Current**: Generic error strings
-- **Proposed**: Enum with variants like `RateLimited`, `InvalidApiKey`, `ModelNotFound`, `NetworkError`
-- **Benefit**: Better error handling and recovery strategies
+### 9. Mock Client for Testing
+- Would help with CLI testing
 
-### 14. Async Trait Methods
-- **Need**: All trait methods should be properly async
-- **Benefit**: Better performance, no blocking operations
+## 🐛 Issues/Observations in v0.3.0
 
-### 15. Builder Pattern Everywhere
-- **Need**: Consistent use of builder pattern for complex configurations
-- **Example**: `SummaryRequest::builder().format("bullets").max_length(500).build()`
-- **Benefit**: Better API ergonomics, easier to extend
+1. **ChatSession Constructor**: Takes client by value, making it impossible to reuse the client or reset the session without recreating everything
 
-## Quality of Life
+2. **Missing re-exports**: Would be helpful to re-export common types at crate root
 
-### 16. Timeout Granularity
-- **Need**: Separate timeouts for connection vs. response generation
-- **API**: `connection_timeout` and `response_timeout` in `ClientConfig`
-- **Benefit**: Better handling of slow model responses vs. network issues
+3. **Documentation**: More examples would help, especially for ChatSession usage patterns
 
-### 17. Progress Callbacks
-- **Need**: Callbacks for long-running operations
-- **API**: `on_progress` callback in config or request
-- **Benefit**: Better UX for CLI and GUI applications
+## 💡 Implementation Suggestions
 
-### 18. Model Aliases
-- **Need**: Simpler model selection with aliases like "fast", "balanced", "powerful"
-- **API**: `ModelAlias` enum that maps to specific models per provider
-- **Benefit**: Easier model selection for users
+### For Streaming (High Priority)
+Consider using `tokio_stream` and async generators:
+```rust
+use tokio_stream::Stream;
 
-## Documentation Requests
+pub trait AiClient {
+    fn send_prompt_streaming(&self, prompt: &str) 
+        -> impl Stream<Item = Result<String>>;
+}
+```
 
-### 19. Best Practices Guide
-- How to handle rate limits effectively
-- Recommended timeout values per model
-- Cost optimization strategies
-- Error recovery patterns
+### For Response Metadata
+A non-breaking approach could be:
+```rust
+// Keep existing method for compatibility
+async fn send_prompt(&self, prompt: &str) -> Result<String>;
 
-### 20. More Examples
-- Streaming responses example
-- Error handling patterns
-- Building a chatbot
-- Parallel processing with progress reporting
+// Add new method that returns Response
+async fn send_prompt_detailed(&self, prompt: &str) -> Result<Response>;
+```
 
-## Testing Support
+## 🎯 Summary for v0.4.0
 
-### 21. Mock Client
-- **Need**: A mock implementation for testing
-- **API**: `MockAiClient` that returns predetermined responses
-- **Benefit**: Easier testing of applications using the crate
+**Top 3 Priorities** (would immediately improve CLI):
+1. Streaming responses
+2. Response metadata (especially token usage)
+3. System prompt support
 
-### 22. Request Recording
-- **Need**: Record and replay API interactions for testing
-- **API**: `RecordingClient` wrapper
-- **Benefit**: Reproducible tests, debugging production issues
+**Quick Wins**:
+- Add `ChatSession::clear()` method
+- Export `Message` type for conversation history
+- Better error types enum
 
-## Performance
+## 🙏 Thank You!
 
-### 23. Connection Pooling
-- **Need**: Reuse HTTP connections across requests
-- **Benefit**: Lower latency, reduced connection overhead
+The v0.3.0 release with RetryStrategy and ChatSession has been fantastic! The retry strategies in particular have made the CLI much more robust. Looking forward to continued collaboration!
 
-### 24. Response Compression
-- **Need**: Support for compressed responses
-- **Benefit**: Reduced bandwidth usage, faster responses
-
-## Breaking Change Suggestions
-
-If a v0.3.0 or v1.0.0 is planned:
-
-1. **Rename `send_prompt()` to `complete()`** - More accurate naming
-2. **Make `AiClient` object-safe** - Allow for `Box<dyn AiClient>` without issues
-3. **Standardize model names** - Use provider-agnostic names where possible
-4. **Return Result for all operations** - Consistent error handling
-
-## Summary
-
-The most impactful improvements would be:
-1. Streaming support (critical for UX)
-2. Conversation/chat support (enables new use cases)
-3. Better error types (improves reliability)
-4. Response metadata (enables better monitoring)
-5. Custom endpoints (enables enterprise use)
-
-These changes would make the crate more suitable for production applications while maintaining its current simplicity for basic use cases.
+---
+*Note: This wishlist is actively maintained by the chatdelta-cli project as a communication channel with the upstream crate.*

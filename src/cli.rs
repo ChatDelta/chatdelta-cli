@@ -109,15 +109,40 @@ pub struct Args {
     /// Output raw responses without any formatting
     #[arg(long)]
     pub raw: bool,
+
+    /// Retry strategy: exponential, linear, fixed
+    #[arg(long, default_value = "exponential")]
+    pub retry_strategy: String,
+
+    /// Enable conversation mode (interactive chat)
+    #[arg(long, short = 'c')]
+    pub conversation: bool,
+
+    /// System prompt to set context for the AI
+    #[arg(long)]
+    pub system_prompt: Option<String>,
+
+    /// Load conversation history from file
+    #[arg(long)]
+    pub load_conversation: Option<PathBuf>,
+
+    /// Save conversation history to file
+    #[arg(long)]
+    pub save_conversation: Option<PathBuf>,
 }
 
 impl Args {
     /// Validate the arguments and handle conflicts
     pub fn validate(&self) -> Result<(), String> {
-        // Prompt is required unless using special commands or prompt file
-        if self.prompt.is_none() && self.prompt_file.is_none() && !self.list_models && !self.test {
+        // Prompt is required unless using special commands, prompt file, or conversation mode
+        if self.prompt.is_none()
+            && self.prompt_file.is_none()
+            && !self.list_models
+            && !self.test
+            && !self.conversation
+        {
             return Err(
-                "Prompt is required unless using --prompt-file, --list-models or --test"
+                "Prompt is required unless using --prompt-file, --list-models, --test, or --conversation"
                     .to_string(),
             );
         }
@@ -134,6 +159,13 @@ impl Args {
 
         if !matches!(self.format.as_str(), "text" | "json" | "markdown") {
             return Err("Output format must be one of: text, json, markdown".to_string());
+        }
+
+        if !matches!(
+            self.retry_strategy.as_str(),
+            "exponential" | "linear" | "fixed"
+        ) {
+            return Err("Retry strategy must be one of: exponential, linear, fixed".to_string());
         }
 
         if !matches!(self.log_format.as_str(), "simple" | "json" | "structured") {

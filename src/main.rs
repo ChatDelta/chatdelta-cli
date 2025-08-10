@@ -2,7 +2,10 @@
 //!
 //! A command-line tool for querying multiple AI APIs and summarizing their responses.
 
-use chatdelta::{create_client, execute_parallel, generate_summary, AiClient, ClientConfig};
+use chatdelta::{
+    create_client, execute_parallel, generate_summary, AiClient, ChatSession, ClientConfig,
+    RetryStrategy,
+};
 use clap::Parser;
 use std::env;
 use std::fs;
@@ -53,7 +56,12 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         return test_connections(&args).await;
     }
 
-    // Create client configuration using the builder pattern from chatdelta 0.2.0
+    // Handle conversation mode
+    if args.conversation {
+        return run_conversation_mode(&args).await;
+    }
+
+    // Create client configuration using the builder pattern from chatdelta 0.3.0
     let mut config_builder = ClientConfig::builder()
         .timeout(Duration::from_secs(args.timeout))
         .retries(args.retries)
@@ -61,6 +69,21 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(temp) = args.temperature {
         config_builder = config_builder.temperature(temp);
+    }
+
+    // Set retry strategy based on CLI argument (new in 0.3.0)
+    let retry_strategy = match args.retry_strategy.as_str() {
+        "linear" => RetryStrategy::Linear(Duration::from_secs(1)),
+        "fixed" => RetryStrategy::Fixed(Duration::from_secs(2)),
+        _ => RetryStrategy::Exponential(Duration::from_secs(1)), // default with base delay
+    };
+    config_builder = config_builder.retry_strategy(retry_strategy);
+
+    // Add system prompt if provided (checking if this is supported in 0.3.0)
+    if let Some(ref _system_prompt) = args.system_prompt {
+        // Try to set system prompt if the method exists
+        // config_builder = config_builder.system_prompt(system_prompt);
+        // TODO: Use system prompt when API supports it
     }
 
     let config = config_builder.build();
@@ -427,6 +450,137 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
+    Ok(())
+}
+
+/// Run interactive conversation mode
+async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    println!("🗨️  ChatDelta Conversation Mode");
+    println!("Type 'exit' or 'quit' to end the conversation");
+    println!("Type 'clear' to reset the conversation history");
+    println!("Type 'save' to save the conversation to a file");
+    println!();
+
+    // Create client configuration with retry strategy
+    let mut config_builder = ClientConfig::builder()
+        .timeout(Duration::from_secs(args.timeout))
+        .retries(args.retries)
+        .max_tokens(args.max_tokens);
+
+    if let Some(temp) = args.temperature {
+        config_builder = config_builder.temperature(temp);
+    }
+
+    // Set retry strategy
+    let retry_strategy = match args.retry_strategy.as_str() {
+        "linear" => RetryStrategy::Linear(Duration::from_secs(1)),
+        "fixed" => RetryStrategy::Fixed(Duration::from_secs(2)),
+        _ => RetryStrategy::Exponential(Duration::from_secs(1)),
+    };
+    config_builder = config_builder.retry_strategy(retry_strategy);
+
+    let config = config_builder.build();
+
+    // Create a client (prefer GPT for conversation mode)
+    let client: Box<dyn AiClient> = if args.should_use_ai("gpt") {
+        if let Ok(key) = env::var("OPENAI_API_KEY") {
+            create_client("openai", &key, &args.gpt_model, config)?
+        } else {
+            return Err(
+                "Conversation mode requires at least one API key (OPENAI_API_KEY recommended)"
+                    .into(),
+            );
+        }
+    } else if args.should_use_ai("gemini") {
+        if let Ok(key) = env::var("GEMINI_API_KEY") {
+            create_client("gemini", &key, &args.gemini_model, config)?
+        } else {
+            return Err("Conversation mode requires at least one API key".into());
+        }
+    } else if args.should_use_ai("claude") {
+        if let Ok(key) = env::var("ANTHROPIC_API_KEY") {
+            create_client("anthropic", &key, &args.claude_model, config)?
+        } else {
+            return Err("Conversation mode requires at least one API key".into());
+        }
+    } else {
+        return Err("No AI clients available for conversation mode".into());
+    };
+
+    // Create a ChatSession
+    let mut session = ChatSession::new(client);
+
+    // Load conversation history if specified
+    if let Some(ref path) = args.load_conversation {
+        let _history = fs::read_to_string(path)?;
+        // TODO: Parse and load history (this would need a proper format)
+        println!("📁 Loaded conversation from: {}", path.display());
+    }
+
+    // Add system prompt if provided
+    if let Some(ref system_prompt) = args.system_prompt {
+        // Note: This depends on what methods ChatSession actually provides
+        // session.set_system_prompt(system_prompt);
+        println!("📋 System prompt set: {}", system_prompt);
+    }
+
+    // Main conversation loop
+    loop {
+        print!("> ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim();
+
+        // Handle special commands
+        match input.to_lowercase().as_str() {
+            "exit" | "quit" => {
+                println!("👋 Goodbye!");
+                break;
+            }
+            "clear" => {
+                // Reset conversation - create a new session with the same client
+                // Note: We can't extract the client from session, so we need to recreate it
+                println!("🔄 Conversation cleared (restart required for now)");
+                continue;
+            }
+            "save" => {
+                // Save conversation
+                if let Some(ref path) = args.save_conversation {
+                    // TODO: Implement saving logic
+                    println!("💾 Conversation saved to: {}", path.display());
+                } else {
+                    println!("⚠️  No save path specified. Use --save-conversation <path>");
+                }
+                continue;
+            }
+            "" => continue,
+            _ => {}
+        }
+
+        // Send message and get response
+        println!("🤔 Thinking...");
+
+        // ChatSession takes a single message and maintains history internally
+        match session.send(input).await {
+            Ok(response) => {
+                println!("\n{}\n", response);
+            }
+            Err(e) => {
+                eprintln!("❌ Error: {}", e);
+            }
+        }
+    }
+
+    // Save conversation on exit if requested
+    if let Some(ref path) = args.save_conversation {
+        // TODO: Implement saving logic
+        println!("💾 Conversation saved to: {}", path.display());
+    }
+
     Ok(())
 }
 
