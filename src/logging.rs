@@ -73,7 +73,10 @@ impl Logger {
         // Create log directory if it doesn't exist
         fs::create_dir_all(&log_dir)?;
 
-        let session_id = args.session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+        let session_id = args
+            .session_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
 
         Ok(Logger {
             log_dir,
@@ -89,7 +92,7 @@ impl Logger {
     pub fn start_interaction(&mut self, prompt: &str) {
         let interaction_id = Uuid::new_v4().to_string();
         self.start_time = Some(Instant::now());
-        
+
         self.current_entry = Some(LogEntry {
             timestamp: Utc::now(),
             session_id: self.session_id.clone(),
@@ -122,11 +125,19 @@ impl Logger {
                 error: response.err().map(|e| e.to_string()),
             };
 
-            entry.responses.insert(model_name.to_string(), model_response);
+            entry
+                .responses
+                .insert(model_name.to_string(), model_response);
         }
     }
 
-    pub fn log_error(&mut self, model: &str, error_type: &str, message: &str, retry_attempt: Option<u32>) {
+    pub fn log_error(
+        &mut self,
+        model: &str,
+        error_type: &str,
+        message: &str,
+        retry_attempt: Option<u32>,
+    ) {
         if self.enable_errors {
             if let Some(entry) = &mut self.current_entry {
                 entry.errors.push(ErrorEntry {
@@ -146,7 +157,10 @@ impl Logger {
         }
     }
 
-    pub fn finalize_interaction(&mut self, summary_time: Option<Duration>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn finalize_interaction(
+        &mut self,
+        summary_time: Option<Duration>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(mut entry) = self.current_entry.take() {
             if self.enable_metrics {
                 let total_time = self.start_time.map(|t| t.elapsed()).unwrap_or_default();
@@ -155,7 +169,9 @@ impl Logger {
 
                 entry.metrics = Some(PerformanceMetrics {
                     total_time_ms: total_time.as_millis(),
-                    parallel_execution_time_ms: entry.responses.values()
+                    parallel_execution_time_ms: entry
+                        .responses
+                        .values()
                         .map(|r| r.response_time_ms)
                         .max()
                         .unwrap_or(0),
@@ -194,7 +210,7 @@ impl Logger {
                 writeln!(file, "Session: {}", entry.session_id)?;
                 writeln!(file, "Prompt: {}", entry.prompt)?;
                 writeln!(file)?;
-                
+
                 for (model, response) in &entry.responses {
                     writeln!(file, "--- {} ---", model)?;
                     writeln!(file, "Success: {}", response.success)?;
@@ -219,7 +235,11 @@ impl Logger {
                 if let Some(metrics) = &entry.metrics {
                     writeln!(file, "--- METRICS ---")?;
                     writeln!(file, "Total Time: {}ms", metrics.total_time_ms)?;
-                    writeln!(file, "Parallel Execution: {}ms", metrics.parallel_execution_time_ms)?;
+                    writeln!(
+                        file,
+                        "Parallel Execution: {}ms",
+                        metrics.parallel_execution_time_ms
+                    )?;
                     if let Some(summary_time) = metrics.summary_generation_time_ms {
                         writeln!(file, "Summary Generation: {}ms", summary_time)?;
                     }
@@ -232,21 +252,36 @@ impl Logger {
                 if !entry.errors.is_empty() {
                     writeln!(file, "--- ERRORS ---")?;
                     for error in &entry.errors {
-                        writeln!(file, "[{}] {}: {} - {}", 
-                            error.timestamp, error.model, error.error_type, error.message)?;
+                        writeln!(
+                            file,
+                            "[{}] {}: {} - {}",
+                            error.timestamp, error.model, error.error_type, error.message
+                        )?;
                     }
                     writeln!(file)?;
                 }
                 writeln!(file, "========================================")?;
                 writeln!(file)?;
             }
-            _ => { // simple format
-                writeln!(file, "[{}] Session: {} | Interaction: {}", 
-                    entry.timestamp, entry.session_id, entry.interaction_id)?;
+            _ => {
+                // simple format
+                writeln!(
+                    file,
+                    "[{}] Session: {} | Interaction: {}",
+                    entry.timestamp, entry.session_id, entry.interaction_id
+                )?;
                 writeln!(file, "Prompt: {}", entry.prompt)?;
                 for (model, response) in &entry.responses {
-                    writeln!(file, "{}: {}", model, 
-                        if response.success { "SUCCESS" } else { "FAILED" })?;
+                    writeln!(
+                        file,
+                        "{}: {}",
+                        model,
+                        if response.success {
+                            "SUCCESS"
+                        } else {
+                            "FAILED"
+                        }
+                    )?;
                 }
                 if let Some(summary) = &entry.summary {
                     writeln!(file, "Summary: {}", summary)?;
@@ -260,7 +295,7 @@ impl Logger {
 
     pub fn get_log_stats(&self) -> Result<LogStats, Box<dyn std::error::Error>> {
         let mut stats = LogStats::default();
-        
+
         for entry in fs::read_dir(&self.log_dir)? {
             let entry = entry?;
             if entry.file_type()?.is_file() {

@@ -5,10 +5,14 @@ use std::path::PathBuf;
 
 /// Command line arguments for chatdelta
 #[derive(Parser, Debug)]
-#[command(version, about = "Query multiple AIs and connect their responses")]
+#[command(version, about = "Query multiple AIs and connect their responses", long_about = None)]
 pub struct Args {
-    /// Prompt to send to the AIs
+    /// Prompt to send to the AIs (use '-' to read from stdin)
     pub prompt: Option<String>,
+
+    /// Read prompt from a file
+    #[arg(long, short = 'F', conflicts_with = "prompt")]
+    pub prompt_file: Option<PathBuf>,
 
     /// Optional path to log the full interaction
     #[arg(long, short)]
@@ -93,16 +97,31 @@ pub struct Args {
     /// Test API connections and exit
     #[arg(long)]
     pub test: bool,
+
+    /// Save individual model responses to separate files
+    #[arg(long)]
+    pub save_responses: Option<PathBuf>,
+
+    /// Show progress spinner for long operations
+    #[arg(long, default_value = "true")]
+    pub progress: bool,
+
+    /// Output raw responses without any formatting
+    #[arg(long)]
+    pub raw: bool,
 }
 
 impl Args {
     /// Validate the arguments and handle conflicts
     pub fn validate(&self) -> Result<(), String> {
-        // Prompt is required unless using special commands
-        if self.prompt.is_none() && !self.list_models && !self.test {
-            return Err("Prompt is required unless using --list-models or --test".to_string());
+        // Prompt is required unless using special commands or prompt file
+        if self.prompt.is_none() && self.prompt_file.is_none() && !self.list_models && !self.test {
+            return Err(
+                "Prompt is required unless using --prompt-file, --list-models or --test"
+                    .to_string(),
+            );
         }
-        
+
         if let Some(prompt) = &self.prompt {
             if prompt.is_empty() {
                 return Err("Prompt cannot be empty".to_string());
@@ -127,13 +146,19 @@ impl Args {
 
         for ai in &self.only {
             if !matches!(ai.as_str(), "gpt" | "gemini" | "claude") {
-                return Err(format!("Unknown AI '{}'. Valid options: gpt, gemini, claude", ai));
+                return Err(format!(
+                    "Unknown AI '{}'. Valid options: gpt, gemini, claude",
+                    ai
+                ));
             }
         }
 
         for ai in &self.exclude {
             if !matches!(ai.as_str(), "gpt" | "gemini" | "claude") {
-                return Err(format!("Unknown AI '{}'. Valid options: gpt, gemini, claude", ai));
+                return Err(format!(
+                    "Unknown AI '{}'. Valid options: gpt, gemini, claude",
+                    ai
+                ));
             }
         }
 

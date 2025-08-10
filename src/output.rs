@@ -24,10 +24,12 @@ fn output_json(
     digest: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut json_output = serde_json::Map::new();
-    json_output.insert(
-        "prompt".to_string(),
-        serde_json::Value::String(args.prompt.as_ref().unwrap().clone()),
-    );
+    if let Some(prompt) = args.prompt.as_ref() {
+        json_output.insert(
+            "prompt".to_string(),
+            serde_json::Value::String(prompt.clone()),
+        );
+    }
 
     let mut responses_obj = serde_json::Map::new();
     for (name, response) in responses {
@@ -56,7 +58,9 @@ fn output_markdown(
     digest: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("# ChatDelta Results\n");
-    println!("**Prompt:** {}\n", args.prompt.as_ref().unwrap());
+    if let Some(prompt) = args.prompt.as_ref() {
+        println!("**Prompt:** {}\n", prompt);
+    }
 
     for (name, response) in responses {
         println!("## {}\n", name);
@@ -114,8 +118,9 @@ pub fn log_interaction(
     if let Some(path) = &args.log {
         match File::create(path) {
             Ok(mut file) => {
-                let prompt = args.prompt.as_ref().unwrap();
-                let _ = writeln!(file, "Prompt:\n{}\n", prompt);
+                if let Some(prompt) = args.prompt.as_ref() {
+                    let _ = writeln!(file, "Prompt:\n{}\n", prompt);
+                }
                 for (name, response) in responses {
                     let _ = writeln!(file, "{}:\n{}\n", name, response);
                 }
@@ -128,7 +133,11 @@ pub fn log_interaction(
             }
             Err(e) => {
                 if !args.quiet {
-                    eprintln!("Warning: Failed to create log file {}: {}", path.display(), e);
+                    eprintln!(
+                        "Warning: Failed to create log file {}: {}",
+                        path.display(),
+                        e
+                    );
                 }
             }
         }
