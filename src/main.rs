@@ -31,14 +31,14 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         let mut buffer = String::new();
         io::stdin().read_to_string(&mut buffer)?;
         args.prompt = Some(buffer.trim().to_string());
-        if args.prompt.as_ref().unwrap().is_empty() {
+        if args.prompt.as_ref().map_or(true, |p| p.is_empty()) {
             return Err("No prompt provided via stdin".into());
         }
     } else if let Some(prompt_file) = &args.prompt_file {
         let content = fs::read_to_string(prompt_file)
             .map_err(|e| format!("Failed to read prompt file: {}", e))?;
         args.prompt = Some(content.trim().to_string());
-        if args.prompt.as_ref().unwrap().is_empty() {
+        if args.prompt.as_ref().map_or(true, |p| p.is_empty()) {
             return Err("Prompt file is empty".into());
         }
     }

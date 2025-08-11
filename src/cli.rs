@@ -151,6 +151,14 @@ impl Args {
             if prompt.is_empty() {
                 return Err("Prompt cannot be empty".to_string());
             }
+            // Validate prompt length to prevent DoS
+            if prompt.len() > 100_000 {
+                return Err("Prompt exceeds maximum length of 100,000 characters".to_string());
+            }
+            // Check for null bytes which could cause issues
+            if prompt.contains('\0') {
+                return Err("Prompt contains invalid null characters".to_string());
+            }
         }
 
         if self.verbose && self.quiet {
