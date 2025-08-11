@@ -15,6 +15,7 @@ use std::time::Duration;
 
 mod cli;
 mod logging;
+mod metrics_display;
 mod output;
 
 use cli::Args;
