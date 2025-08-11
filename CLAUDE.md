@@ -80,24 +80,25 @@ ChatDelta CLI is a Rust-based command-line tool that queries multiple AI APIs (O
   - Multiple log formats: simple, JSON, structured
   - Default log location: ~/.chatdelta/logs
 
-### New Features in v0.3.0
+### Features from chatdelta crate
 
-ChatDelta CLI now leverages the new features from chatdelta crate v0.3.0:
+ChatDelta CLI leverages features from chatdelta crate v0.4.0:
 
 - **RetryStrategy**: Configurable retry strategies (exponential, linear, fixed) for handling API failures
 - **ChatSession**: Interactive conversation mode with message history
 - **Improved Error Handling**: Better retry logic and error recovery
+- **Enhanced Model Support**: Support for latest AI models from all providers
 
 ### Key Dependencies
 
-The project depends on the `chatdelta` crate (v0.3.0) which provides:
+The project depends on the `chatdelta` crate (v0.4.0) which provides:
 - `AiClient` trait for unified API interaction
 - `ClientConfig` builder for configuration
 - `create_client()` factory function for client instantiation
 - `execute_parallel()` for concurrent API queries
 - `generate_summary()` for response summarization
-- `ChatSession` for conversation management (new in v0.3.0)
-- `RetryStrategy` enum for configurable retry logic (new in v0.3.0)
+- `ChatSession` for conversation management
+- `RetryStrategy` enum for configurable retry logic
 
 ### API Integration Pattern
 

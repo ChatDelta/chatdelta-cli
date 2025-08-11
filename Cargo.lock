@@ -167,9 +167,9 @@ checksum = "9555578bc9e57714c812a1f84e4fc5b4d21fcb063490c624de019f7464c91268"
 
 [[package]]
 name = "chatdelta"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08912d7cb776e762b87a67a02223c470b95f4199130c657041b20fd4711f226e"
+checksum = "983086dd5839bf01e493bf0b5dafa00b128ae09816b0e1cb34a4a84b8ae3c57d"
 dependencies = [
  "async-trait",
  "bytes",
