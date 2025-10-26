@@ -57,6 +57,10 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         return test_connections(&args).await;
     }
 
+    if args.doctor {
+        return run_doctor(&args);
+    }
+
     // Handle conversation mode
     if args.conversation {
         return run_conversation_mode(&args).await;
@@ -93,7 +97,10 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let mut clients: Vec<Box<dyn AiClient>> = Vec::new();
 
     if args.should_use_ai("gpt") {
-        if let Ok(key) = env::var("OPENAI_API_KEY") {
+        let openai_key = env::var("OPENAI_API_KEY")
+            .or_else(|_| env::var("CHATGPT_API_KEY"));
+
+        if let Ok(key) = openai_key {
             match create_client("openai", &key, &args.gpt_model, config.clone()) {
                 Ok(client) => clients.push(client),
                 Err(e) => {
@@ -103,7 +110,7 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         } else if !args.quiet {
-            eprintln!("Warning: OPENAI_API_KEY not set, skipping ChatGPT");
+            eprintln!("Warning: OPENAI_API_KEY or CHATGPT_API_KEY not set, skipping ChatGPT");
         }
     }
 
@@ -123,7 +130,10 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.should_use_ai("claude") {
-        if let Ok(key) = env::var("ANTHROPIC_API_KEY") {
+        let anthropic_key = env::var("ANTHROPIC_API_KEY")
+            .or_else(|_| env::var("CLAUDE_API_KEY"));
+
+        if let Ok(key) = anthropic_key {
             match create_client("claude", &key, &args.claude_model, config.clone()) {
                 Ok(client) => clients.push(client),
                 Err(e) => {
@@ -133,7 +143,7 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         } else if !args.quiet {
-            eprintln!("Warning: ANTHROPIC_API_KEY not set, skipping Claude");
+            eprintln!("Warning: ANTHROPIC_API_KEY or CLAUDE_API_KEY not set, skipping Claude");
         }
     }
 
@@ -244,9 +254,11 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         // Try to use Gemini for summary, fall back to Claude, then OpenAI
         let summary_client = if let Ok(key) = env::var("GEMINI_API_KEY") {
             create_client("gemini", &key, &args.gemini_model, config.clone()).ok()
-        } else if let Ok(key) = env::var("ANTHROPIC_API_KEY") {
+        } else if let Ok(key) = env::var("ANTHROPIC_API_KEY")
+            .or_else(|_| env::var("CLAUDE_API_KEY")) {
             create_client("claude", &key, &args.claude_model, config.clone()).ok()
-        } else if let Ok(key) = env::var("OPENAI_API_KEY") {
+        } else if let Ok(key) = env::var("OPENAI_API_KEY")
+            .or_else(|_| env::var("CHATGPT_API_KEY")) {
             create_client("openai", &key, &args.gpt_model, config).ok()
         } else {
             None
@@ -354,6 +366,109 @@ fn print_available_models() {
     println!("   --gpt-model, --gemini-model, --claude-model");
 }
 
+/// Check API key configuration and provide setup guidance
+fn run_doctor(_args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    println!("🏥 ChatDelta Doctor - API Key Configuration Check\n");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    let mut all_configured = true;
+    let mut configured_count = 0;
+
+    // Check OpenAI API Key (check both OPENAI_API_KEY and CHATGPT_API_KEY)
+    let openai_key = env::var("OPENAI_API_KEY")
+        .or_else(|_| env::var("CHATGPT_API_KEY"));
+
+    match openai_key {
+        Ok(key) => {
+            if !key.is_empty() {
+                let var_name = if env::var("OPENAI_API_KEY").is_ok() {
+                    "OPENAI_API_KEY"
+                } else {
+                    "CHATGPT_API_KEY"
+                };
+                println!("✓ OpenAI API Key: Configured ({})", var_name);
+                configured_count += 1;
+            } else {
+                println!("✗ OpenAI API Key: Empty");
+                all_configured = false;
+            }
+        }
+        Err(_) => {
+            println!("✗ OpenAI API Key: Not found");
+            println!("  → Get your API key at: https://platform.openai.com/api-keys");
+            println!("  → Set it with: export OPENAI_API_KEY=your-key-here");
+            println!("  → Or: export CHATGPT_API_KEY=your-key-here\n");
+            all_configured = false;
+        }
+    }
+
+    // Check Gemini API Key
+    match env::var("GEMINI_API_KEY") {
+        Ok(key) => {
+            if !key.is_empty() {
+                println!("✓ Gemini API Key: Configured");
+                configured_count += 1;
+            } else {
+                println!("✗ Gemini API Key: Empty");
+                all_configured = false;
+            }
+        }
+        Err(_) => {
+            println!("✗ Gemini API Key: Not found");
+            println!("  → Get your API key at: https://makersuite.google.com/app/apikey");
+            println!("  → Set it with: export GEMINI_API_KEY=your-key-here\n");
+            all_configured = false;
+        }
+    }
+
+    // Check Anthropic API Key (check both ANTHROPIC_API_KEY and CLAUDE_API_KEY)
+    let anthropic_key = env::var("ANTHROPIC_API_KEY")
+        .or_else(|_| env::var("CLAUDE_API_KEY"));
+
+    match anthropic_key {
+        Ok(key) => {
+            if !key.is_empty() {
+                let var_name = if env::var("ANTHROPIC_API_KEY").is_ok() {
+                    "ANTHROPIC_API_KEY"
+                } else {
+                    "CLAUDE_API_KEY"
+                };
+                println!("✓ Anthropic API Key: Configured ({})", var_name);
+                configured_count += 1;
+            } else {
+                println!("✗ Anthropic API Key: Empty");
+                all_configured = false;
+            }
+        }
+        Err(_) => {
+            println!("✗ Anthropic API Key: Not found");
+            println!("  → Get your API key at: https://console.anthropic.com/settings/keys");
+            println!("  → Set it with: export ANTHROPIC_API_KEY=your-key-here");
+            println!("  → Or: export CLAUDE_API_KEY=your-key-here\n");
+            all_configured = false;
+        }
+    }
+
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!(
+        "📊 Summary: {}/3 API keys configured",
+        configured_count
+    );
+
+    if all_configured {
+        println!("\n✓ All API keys are configured! You're ready to use ChatDelta.");
+        println!("  Run 'chatdelta --test' to verify API connections.");
+    } else if configured_count > 0 {
+        println!("\n⚠️  Some API keys are missing. ChatDelta will work with configured providers.");
+        println!("  You need at least one API key to use ChatDelta.");
+    } else {
+        println!("\n✗ No API keys configured. Please set up at least one API key to use ChatDelta.");
+        return Err("No API keys configured".into());
+    }
+
+    Ok(())
+}
+
 /// Test API connections
 async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let mut config_builder = ClientConfig::builder()
@@ -371,7 +486,10 @@ async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let mut all_passed = true;
 
     if args.should_use_ai("gpt") {
-        match env::var("OPENAI_API_KEY") {
+        let openai_key = env::var("OPENAI_API_KEY")
+            .or_else(|_| env::var("CHATGPT_API_KEY"));
+
+        match openai_key {
             Ok(key) => match create_client("openai", &key, &args.gpt_model, config.clone()) {
                 Ok(client) => match client.send_prompt(test_prompt).await {
                     Ok(_) => println!("✓ ChatGPT connection successful"),
@@ -386,7 +504,7 @@ async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             },
             Err(_) => {
-                println!("✗ ChatGPT: OPENAI_API_KEY not set");
+                println!("✗ ChatGPT: OPENAI_API_KEY or CHATGPT_API_KEY not set");
                 all_passed = false;
             }
         }
@@ -415,7 +533,10 @@ async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     if args.should_use_ai("claude") {
-        match env::var("ANTHROPIC_API_KEY") {
+        let anthropic_key = env::var("ANTHROPIC_API_KEY")
+            .or_else(|_| env::var("CLAUDE_API_KEY"));
+
+        match anthropic_key {
             Ok(key) => match create_client("claude", &key, &args.claude_model, config.clone()) {
                 Ok(client) => match client.send_prompt(test_prompt).await {
                     Ok(_) => println!("✓ Claude connection successful"),
@@ -430,7 +551,7 @@ async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             },
             Err(_) => {
-                println!("✗ Claude: ANTHROPIC_API_KEY not set");
+                println!("✗ Claude: ANTHROPIC_API_KEY or CLAUDE_API_KEY not set");
                 all_passed = false;
             }
         }
@@ -486,11 +607,14 @@ async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
 
     // Create a client (prefer GPT for conversation mode)
     let client: Box<dyn AiClient> = if args.should_use_ai("gpt") {
-        if let Ok(key) = env::var("OPENAI_API_KEY") {
+        let openai_key = env::var("OPENAI_API_KEY")
+            .or_else(|_| env::var("CHATGPT_API_KEY"));
+
+        if let Ok(key) = openai_key {
             create_client("openai", &key, &args.gpt_model, config)?
         } else {
             return Err(
-                "Conversation mode requires at least one API key (OPENAI_API_KEY recommended)"
+                "Conversation mode requires at least one API key (OPENAI_API_KEY or CHATGPT_API_KEY recommended)"
                     .into(),
             );
         }
@@ -501,7 +625,10 @@ async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
             return Err("Conversation mode requires at least one API key".into());
         }
     } else if args.should_use_ai("claude") {
-        if let Ok(key) = env::var("ANTHROPIC_API_KEY") {
+        let anthropic_key = env::var("ANTHROPIC_API_KEY")
+            .or_else(|_| env::var("CLAUDE_API_KEY"));
+
+        if let Ok(key) = anthropic_key {
             create_client("anthropic", &key, &args.claude_model, config)?
         } else {
             return Err("Conversation mode requires at least one API key".into());

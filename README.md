@@ -26,9 +26,15 @@ The resulting binary will be available in `target/release/chatdelta`.
 Set your API keys in the environment before running the tool:
 
 ```bash
-export OPENAI_API_KEY=<your-openai-key>
+export OPENAI_API_KEY=<your-openai-key>  # or CHATGPT_API_KEY
 export GEMINI_API_KEY=<your-gemini-key>
-export ANTHROPIC_API_KEY=<your-anthropic-key>
+export ANTHROPIC_API_KEY=<your-anthropic-key>  # or CLAUDE_API_KEY
+```
+
+Check your API key configuration:
+
+```bash
+./chatdelta --doctor
 ```
 
 Run the CLI with a prompt:
@@ -39,12 +45,13 @@ Run the CLI with a prompt:
 
 ### Common options
 
+- `--doctor`: check API key configuration and get setup guidance
+- `--test`: verify API connectivity without sending a prompt
+- `--list-models`: print available model names and exit
 - `--log <path>`: save the full conversation to a file
 - `--format <text|json|markdown>`: choose output format
 - `--only gpt,gemini` or `--exclude claude`: control which AIs are queried
 - `--no-summary`: display raw responses without generating a summary
-- `--list-models`: print available model names and exit
-- `--test`: verify API connectivity without sending a prompt
 
 See `--help` for the full list of flags.
 

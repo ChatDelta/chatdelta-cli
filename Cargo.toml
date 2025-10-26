@@ -1,6 +1,6 @@
 [package]
 name = "chatdelta-cli"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "Command-line interface for ChatDelta - a unified tool for querying multiple AI APIs"
 license = "MIT"

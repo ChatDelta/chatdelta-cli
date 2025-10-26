@@ -98,6 +98,10 @@ pub struct Args {
     #[arg(long)]
     pub test: bool,
 
+    /// Check API key configuration and provide setup guidance
+    #[arg(long)]
+    pub doctor: bool,
+
     /// Save individual model responses to separate files
     #[arg(long)]
     pub save_responses: Option<PathBuf>,
@@ -139,10 +143,11 @@ impl Args {
             && self.prompt_file.is_none()
             && !self.list_models
             && !self.test
+            && !self.doctor
             && !self.conversation
         {
             return Err(
-                "Prompt is required unless using --prompt-file, --list-models, --test, or --conversation"
+                "Prompt is required unless using --prompt-file, --list-models, --test, --doctor, or --conversation"
                     .to_string(),
             );
         }
