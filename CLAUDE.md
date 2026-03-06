@@ -8,8 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build the project
 cargo build --release
 
-# Run tests
+# Run all tests
 cargo test
+
+# Run a single test by name
+cargo test test_args_parsing
 
 # Format code
 cargo fmt
@@ -41,12 +44,12 @@ echo "Your prompt" | ./target/release/chatdelta -
 # Raw output mode (no formatting)
 ./target/release/chatdelta "prompt" --raw
 
-# Use different retry strategies (new in v0.3.0)
+# Use different retry strategies
 ./target/release/chatdelta "prompt" --retry-strategy exponential  # default
 ./target/release/chatdelta "prompt" --retry-strategy linear
 ./target/release/chatdelta "prompt" --retry-strategy fixed
 
-# Interactive conversation mode (new in v0.3.0)
+# Interactive conversation mode
 ./target/release/chatdelta --conversation
 
 # Conversation mode with system prompt
@@ -87,7 +90,6 @@ ChatDelta CLI is a Rust-based command-line tool that queries multiple AI APIs (O
   - Records per-model responses, timings, token usage, and errors
   - Multiple log formats: simple (human-readable), JSON, structured
   - Default log location: ~/.chatdelta/logs
-  - Tracks performance metrics and generates session summaries
 
 - **metrics_display.rs**: Performance metrics tracking and display
   - Uses `ClientMetrics` from core library for consistent tracking
@@ -101,7 +103,7 @@ The project depends on the `chatdelta` crate (v0.6.0) which provides:
 - `AiClient` trait for unified API interaction
 - `ClientConfig` builder for configuration with retry strategies
 - `create_client()` factory function supporting "openai", "gemini", "claude", "anthropic" providers
-- `execute_parallel()` for concurrent API queries returning Vec<(String, Result<String>)>
+- `execute_parallel()` for concurrent API queries returning `Vec<(String, Result<String>)>`
 - `generate_summary()` for response summarization
 - `ChatSession` for conversation management with message history
 - `RetryStrategy` enum: Exponential, Linear, Fixed
@@ -119,19 +121,14 @@ Each AI client is created conditionally based on:
 
 All clients share common configuration (timeout, retries, temperature, max_tokens, retry_strategy) through `ClientConfig::builder()`. Client creation errors are handled gracefully with warnings rather than hard failures.
 
-### Doctor Command
+### Partially Implemented Features
 
-The `--doctor` flag (new in v0.3.0) checks for API key configuration and provides helpful setup guidance:
-- Checks all environment variable variants (OPENAI_API_KEY/CHATGPT_API_KEY, etc.)
-- Displays which environment variable name is being used
-- Provides direct links to obtain API keys from each provider
-- Shows example export commands for setting up environment variables
+These flags are accepted by the CLI but not fully wired up:
+- `--system-prompt`: Printed as confirmation but not passed to the `ChatSession` or `ClientConfig`
+- `--save-conversation` / `--load-conversation`: File paths are accepted but serialization/deserialization logic is stubbed with TODOs
 
 ## Testing
 
-The project includes integration tests in main.rs that verify:
-- Argument parsing and validation
-- Error handling for missing API keys
-- Command validation logic
+The project includes integration tests in `main.rs` that verify argument parsing, validation, and error handling for missing API keys. Tests run without live API calls.
 
 Note: Tests expect the `chatdelta` crate to be available as a dependency from crates.io.
