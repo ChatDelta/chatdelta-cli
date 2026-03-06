@@ -1,6 +1,6 @@
 //! Command-line interface for ChatDelta
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 /// Command line arguments for chatdelta
@@ -75,11 +75,11 @@ pub struct Args {
     pub gpt_model: String,
 
     /// Gemini model to use
-    #[arg(long, default_value = "gemini-1.5-pro-latest")]
+    #[arg(long, default_value = "gemini-2.5-flash")]
     pub gemini_model: String,
 
     /// Claude model to use
-    #[arg(long, default_value = "claude-3-5-sonnet-20241022")]
+    #[arg(long, default_value = "claude-sonnet-4-6")]
     pub claude_model: String,
 
     /// Maximum tokens for Claude responses
@@ -133,11 +133,103 @@ pub struct Args {
     /// Save conversation history to file
     #[arg(long)]
     pub save_conversation: Option<PathBuf>,
+
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Run a structured multi-model debate between two AI models
+    Debate(DebateArgs),
+    /// Alias for 'debate'
+    Deliberate(DebateArgs),
+}
+
+/// Arguments for the `debate` / `deliberate` subcommand
+#[derive(clap::Args, Debug, Clone)]
+pub struct DebateArgs {
+    /// Model A specification: provider:model  (e.g. openai:gpt-4o, anthropic:claude-opus-4-6)
+    #[arg(long, required = true)]
+    pub model_a: String,
+
+    /// Model B specification: provider:model  (e.g. anthropic:claude-sonnet-4-6, google:gemini-2.5-flash)
+    #[arg(long, required = true)]
+    pub model_b: String,
+
+    /// Moderator model specification (auto-detected from available API keys if omitted)
+    #[arg(long)]
+    pub moderator: Option<String>,
+
+    /// Number of rebuttal rounds after the opening exchange (each round = A rebuttal + B rebuttal)
+    #[arg(long, default_value = "1")]
+    pub rounds: u32,
+
+    /// Debate protocol
+    #[arg(long, default_value = "moderated-debate")]
+    pub protocol: String,
+
+    /// Proposition to debate (use '-' to read from stdin)
+    #[arg(long)]
+    pub prompt: Option<String>,
+
+    /// Read proposition from a file
+    #[arg(long, conflicts_with = "prompt")]
+    pub prompt_file: Option<PathBuf>,
+
+    /// Export the full transcript and moderator report to a markdown file
+    #[arg(long)]
+    pub export: Option<PathBuf>,
+
+    /// Maximum characters per debate turn (used as a guideline in the prompt)
+    #[arg(long, default_value = "2000")]
+    pub max_turn_chars: usize,
+
+    /// Timeout for API requests in seconds
+    #[arg(long, default_value = "120")]
+    pub timeout: u64,
+
+    /// Number of retry attempts per API call
+    #[arg(long, default_value = "1")]
+    pub retries: u32,
+
+    /// Temperature for AI responses (0.0-2.0)
+    #[arg(long)]
+    pub temperature: Option<f32>,
+
+    /// Suppress progress output
+    #[arg(long, short)]
+    pub quiet: bool,
+}
+
+impl DebateArgs {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.rounds > 10 {
+            return Err("--rounds cannot exceed 10 (use a lower value for reasonable debate length)".to_string());
+        }
+        if self.max_turn_chars < 100 {
+            return Err("--max-turn-chars must be at least 100".to_string());
+        }
+        if self.timeout == 0 {
+            return Err("--timeout must be greater than 0".to_string());
+        }
+        if let Some(temp) = self.temperature {
+            if !(0.0..=2.0).contains(&temp) {
+                return Err("--temperature must be between 0.0 and 2.0".to_string());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Args {
     /// Validate the arguments and handle conflicts
     pub fn validate(&self) -> Result<(), String> {
+        // Skip standard prompt validation when a subcommand is present
+        if self.command.is_some() {
+            return Ok(());
+        }
+
         // Prompt is required unless using special commands, prompt file, or conversation mode
         if self.prompt.is_none()
             && self.prompt_file.is_none()

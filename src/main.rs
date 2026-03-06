@@ -14,11 +14,12 @@ use std::path::Path;
 use std::time::Duration;
 
 mod cli;
+mod debate;
 mod logging;
 mod metrics_display;
 mod output;
 
-use cli::Args;
+use cli::{Args, Commands, DebateArgs};
 use logging::Logger;
 use output::{log_interaction, output_results};
 
@@ -347,20 +348,20 @@ fn save_individual_response(
 fn print_available_models() {
     println!("🤖 Available AI Models\n");
     println!("OpenAI:");
-    println!("  • gpt-4o (most capable)");
-    println!("  • gpt-4o-mini (faster, cheaper)");
-    println!("  • gpt-4-turbo (legacy)");
-    println!("  • gpt-3.5-turbo (fastest)\n");
+    println!("  • gpt-5.4         (flagship reasoning — most capable)");
+    println!("  • o3              (strong reasoning, complex tasks)");
+    println!("  • gpt-4o          (fast, highly capable — default)");
+    println!("  • gpt-4o-mini     (faster, cheaper)\n");
 
     println!("Google Gemini:");
-    println!("  • gemini-1.5-pro-latest (most capable)");
-    println!("  • gemini-1.5-flash-latest (faster)");
-    println!("  • gemini-pro (legacy)\n");
+    println!("  • gemini-3.1-pro        (most capable, reasoning-first)");
+    println!("  • gemini-2.5-flash      (fast, cost-efficient — default)");
+    println!("  • gemini-2.5-flash-lite (fastest, highest throughput)\n");
 
     println!("Anthropic Claude:");
-    println!("  • claude-3-5-sonnet-20241022 (most capable)");
-    println!("  • claude-3-haiku-20240307 (faster, cheaper)");
-    println!("  • claude-3-opus-20240229 (legacy)\n");
+    println!("  • claude-opus-4-6              (most capable)");
+    println!("  • claude-sonnet-4-6            (balanced — default)");
+    println!("  • claude-haiku-4-5-20251001    (fast, lightweight)\n");
 
     println!("💡 Set your preferred models with:");
     println!("   --gpt-model, --gemini-model, --claude-model");
@@ -568,10 +569,148 @@ async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    // Route to debate subcommand if present
+    if let Some(command) = args.command {
+        let result = match command {
+            Commands::Debate(debate_args) | Commands::Deliberate(debate_args) => {
+                run_debate(debate_args).await
+            }
+        };
+        if let Err(e) = result {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     if let Err(e) = run(args).await {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
+    Ok(())
+}
+
+/// Run the debate subcommand
+async fn run_debate(args: DebateArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use debate::{DebateConfig, DebateProtocol, ModelSpec, Orchestrator};
+    use std::str::FromStr;
+
+    args.validate()?;
+
+    // Resolve proposition from --prompt, --prompt-file, or stdin
+    let proposition = if let Some(ref p) = args.prompt {
+        if p == "-" {
+            let mut buf = String::new();
+            io::stdin().read_to_string(&mut buf)?;
+            let s = buf.trim().to_string();
+            if s.is_empty() {
+                return Err("No proposition provided via stdin".into());
+            }
+            s
+        } else {
+            p.clone()
+        }
+    } else if let Some(ref path) = args.prompt_file {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read prompt file: {}", e))?;
+        let s = content.trim().to_string();
+        if s.is_empty() {
+            return Err("Prompt file is empty".into());
+        }
+        s
+    } else {
+        // Try piped stdin
+        use std::io::IsTerminal;
+        if !io::stdin().is_terminal() {
+            let mut buf = String::new();
+            io::stdin().read_to_string(&mut buf)?;
+            let s = buf.trim().to_string();
+            if s.is_empty() {
+                return Err("No proposition provided via stdin".into());
+            }
+            s
+        } else {
+            return Err(
+                "No proposition provided. Use --prompt <text>, --prompt-file <path>, or pipe via stdin.".into(),
+            );
+        }
+    };
+
+    // Parse model specs
+    let model_a = ModelSpec::from_str(&args.model_a)?;
+    let model_b = ModelSpec::from_str(&args.model_b)?;
+    let moderator_spec: Option<ModelSpec> = args
+        .moderator
+        .as_deref()
+        .map(ModelSpec::from_str)
+        .transpose()?;
+
+    // Parse protocol
+    let protocol = DebateProtocol::from_str(&args.protocol)?;
+
+    // Build per-turn client config (focused, shorter responses)
+    let mut turn_config_builder = ClientConfig::builder()
+        .timeout(Duration::from_secs(args.timeout))
+        .retries(args.retries)
+        .max_tokens(1024);
+    if let Some(temp) = args.temperature {
+        turn_config_builder = turn_config_builder.temperature(temp);
+    }
+    let turn_config = turn_config_builder.build();
+
+    // Build moderator config (more tokens for comprehensive synthesis)
+    let mod_config = ClientConfig::builder()
+        .timeout(Duration::from_secs(args.timeout))
+        .retries(args.retries)
+        .max_tokens(2048)
+        .build();
+
+    // Create clients
+    let client_a = debate::resolve_client(&model_a, turn_config.clone())?;
+    let client_b = debate::resolve_client(&model_b, turn_config.clone())?;
+
+    let moderator_client = if let Some(ref spec) = moderator_spec {
+        Some(debate::resolve_client(spec, mod_config.clone())?)
+    } else {
+        let auto = debate::resolve_auto_moderator(mod_config)?;
+        if auto.is_none() && !args.quiet {
+            eprintln!(
+                "Warning: No moderator API key available. \
+                 Debate will proceed without moderator synthesis."
+            );
+        }
+        auto
+    };
+
+    let debate_config = DebateConfig {
+        proposition,
+        model_a,
+        model_b,
+        moderator: moderator_spec,
+        rounds: args.rounds,
+        protocol,
+        max_turn_chars: args.max_turn_chars,
+        export_path: args.export.clone(),
+    };
+
+    let mut orchestrator = Orchestrator::new(
+        debate_config,
+        client_a,
+        client_b,
+        moderator_client,
+        args.quiet,
+    );
+
+    let transcript = orchestrator.run().await?;
+
+    if let Some(ref export_path) = args.export {
+        debate::DebateRenderer::export_markdown(&transcript, export_path)?;
+        if !args.quiet {
+            println!("Transcript exported to: {}", export_path.display());
+        }
+    }
+
     Ok(())
 }
 
@@ -715,7 +854,7 @@ async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::Args;
+    use crate::cli::{Args, DebateArgs};
     use std::env;
 
     #[test]
@@ -745,5 +884,50 @@ mod tests {
             Args::try_parse_from(["chatdelta", "Test"]).expect("Should parse test arguments");
         let result = run(args).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_debate_args_parsing() {
+        let args = Args::try_parse_from([
+            "chatdelta",
+            "debate",
+            "--model-a",
+            "openai:gpt-4o",
+            "--model-b",
+            "anthropic:claude-sonnet-4-6",
+            "--prompt",
+            "AI will transform education",
+        ])
+        .expect("Should parse debate arguments");
+
+        assert!(args.command.is_some());
+        // validate() on Args should pass when subcommand is present
+        args.validate().expect("Should pass with subcommand");
+    }
+
+    #[test]
+    fn test_debate_args_validation() {
+        let valid = DebateArgs {
+            model_a: "openai:gpt-4o".to_string(),
+            model_b: "anthropic:claude-sonnet-4-6".to_string(),
+            moderator: None,
+            rounds: 1,
+            protocol: "moderated-debate".to_string(),
+            prompt: Some("Test proposition".to_string()),
+            prompt_file: None,
+            export: None,
+            max_turn_chars: 2000,
+            timeout: 120,
+            retries: 1,
+            temperature: None,
+            quiet: false,
+        };
+        assert!(valid.validate().is_ok());
+
+        let too_many_rounds = DebateArgs {
+            rounds: 11,
+            ..valid.clone()
+        };
+        assert!(too_many_rounds.validate().is_err());
     }
 }
