@@ -8,6 +8,9 @@ ChatDelta CLI is a command-line tool for querying multiple AI models in parallel
 - Runs queries against all enabled models in parallel.
 - Optional summarization of results for quick comparison.
 - Supports output as plain text, JSON, or Markdown.
+- **Streaming**: print tokens as they arrive with `--stream` (single-model).
+- **System prompts**: set persistent context for all models with `--system-prompt`.
+- **Conversation mode**: interactive multi-turn chat with save/load support.
 - **Debate Mode**: structured multi-model deliberation with a moderator that synthesizes the exchange.
 - Command line flags for selecting models, adjusting temperature and timeouts, and more.
 - Built-in commands to list available models and test API connectivity.
@@ -53,8 +56,64 @@ Run the CLI with a prompt:
 - `--format <text|json|markdown>`: choose output format
 - `--only gpt,gemini` or `--exclude claude`: control which AIs are queried
 - `--no-summary`: display raw responses without generating a summary
+- `--system-prompt <text>`: set a system prompt for all models
+- `--stream`: stream tokens as they arrive (single-model; use `--only` to select one)
 
 See `--help` for the full list of flags.
+
+### System prompts
+
+Set context that applies to every model in the query:
+
+```bash
+./chatdelta --system-prompt "You are a senior Rust engineer. Be concise." \
+  "What are the trade-offs between Arc and Rc?"
+```
+
+System prompts also work in conversation mode:
+
+```bash
+./chatdelta --conversation \
+  --system-prompt "You are a helpful coding assistant. Respond only in Python examples."
+```
+
+## Streaming
+
+Use `--stream` with `--only` to print tokens as they arrive instead of waiting for a complete response:
+
+```bash
+./chatdelta --stream --only claude "Explain monads in plain English."
+./chatdelta --stream --only gpt "Write a quicksort in Rust."
+```
+
+`--stream` requires exactly one model. If multiple models are selected, the CLI falls back to parallel mode and prints a warning.
+
+## Conversation Mode
+
+Start an interactive multi-turn session with `--conversation` (`-c`):
+
+```bash
+./chatdelta --conversation
+./chatdelta -c --system-prompt "You are a Socratic tutor."
+```
+
+Commands available during a session:
+
+| Command | Action |
+|---------|--------|
+| `save`  | Write history to the `--save-conversation` path |
+| `clear` | Reset conversation history |
+| `exit` / `quit` | End the session (auto-saves if `--save-conversation` is set) |
+
+Save and resume sessions across runs:
+
+```bash
+# Start a session and save it
+./chatdelta -c --save-conversation session.json
+
+# Resume later
+./chatdelta -c --load-conversation session.json --save-conversation session.json
+```
 
 ## Debate Mode
 
@@ -131,7 +190,7 @@ To run a single test:
 cargo test test_args_parsing
 ```
 
-Note that the tests require the dependent `chatdelta` crate which lives in the repository root. Ensure it is checked out alongside this project.
+Tests use `chatdelta v0.8` from crates.io. The `mock` feature is enabled via `[dev-dependencies]` so no live API keys are needed to run the test suite.
 
 ## Contributing
 
