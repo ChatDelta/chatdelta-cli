@@ -1,103 +1,97 @@
 # ChatDelta CLI
 
-ChatDelta CLI is a command-line tool for querying multiple AI models in parallel and summarizing their responses. It is written in Rust and provides a unified interface to several popular APIs.
-
-## Features
-
-- Connects to OpenAI, Google Gemini, and Anthropic Claude depending on the API keys provided.
-- Runs queries against all enabled models in parallel.
-- Optional summarization of results for quick comparison.
-- Supports output as plain text, JSON, or Markdown.
-- **Streaming**: print tokens as they arrive with `--stream` (single-model).
-- **System prompts**: set persistent context for all models with `--system-prompt`.
-- **Conversation mode**: interactive multi-turn chat with save/load support.
-- **Debate Mode**: structured multi-model deliberation with a moderator that synthesizes the exchange.
-- Command line flags for selecting models, adjusting temperature and timeouts, and more.
-- Built-in commands to list available models and test API connectivity.
+Query OpenAI, Gemini, and Claude in parallel and compare their responses — from a single command.
 
 ## Installation
 
-This crate requires a recent version of Rust. Clone the repository and build with Cargo:
+Requires a recent stable Rust toolchain:
 
 ```bash
 cargo build --release
 ```
 
-The resulting binary will be available in `target/release/chatdelta`.
+The binary lands at `target/release/chatdelta`.
 
-## Usage
+## Setup
 
-Set your API keys in the environment before running the tool:
+Export whichever API keys you have — at least one is required:
 
 ```bash
-export OPENAI_API_KEY=<your-openai-key>  # or CHATGPT_API_KEY
-export GEMINI_API_KEY=<your-gemini-key>
-export ANTHROPIC_API_KEY=<your-anthropic-key>  # or CLAUDE_API_KEY
+export OPENAI_API_KEY=<key>       # or CHATGPT_API_KEY
+export GEMINI_API_KEY=<key>
+export ANTHROPIC_API_KEY=<key>    # or CLAUDE_API_KEY
 ```
 
-Check your API key configuration:
+Verify your configuration:
 
 ```bash
 ./chatdelta --doctor
 ```
 
-Run the CLI with a prompt:
+## Usage
 
 ```bash
 ./chatdelta "How do I implement a binary search in Rust?"
 ```
 
-### Common options
+### Common flags
 
-- `--doctor`: check API key configuration and get setup guidance
-- `--test`: verify API connectivity without sending a prompt
-- `--list-models`: print available model names and exit
-- `--log <path>`: save the full conversation to a file
-- `--format <text|json|markdown>`: choose output format
-- `--only gpt,gemini` or `--exclude claude`: control which AIs are queried
-- `--no-summary`: display raw responses without generating a summary
-- `--system-prompt <text>`: set a system prompt for all models
-- `--stream`: stream tokens as they arrive (single-model; use `--only` to select one)
+| Flag | Description |
+|------|-------------|
+| `--only gpt,gemini` | Query only the listed models |
+| `--exclude claude` | Skip the listed models |
+| `--system-prompt <text>` | Set a system prompt for all models |
+| `--no-summary` | Skip the summary; show raw responses only |
+| `--show-usage` | Print a token / latency table after responses |
+| `--stream` | Stream tokens as they arrive (single-model; use with `--only`) |
+| `--format text\|json\|markdown` | Output format (default: `text`) |
+| `--log <path>` | Append the full exchange to a file |
+| `--test` | Test API connectivity without sending a prompt |
+| `--list-models` | Print available model names and exit |
 
-See `--help` for the full list of flags.
+### --show-usage
 
-### System prompts
+Appends a per-model token count and latency table after the response:
 
-Set context that applies to every model in the query:
+```bash
+./chatdelta --show-usage "What is a monad?"
+```
+
+```
+Model                  Tokens     Latency
+──────────────────────────────────────────
+ChatGPT                  1024      834ms
+Gemini                    718      412ms
+Claude                    892      612ms
+```
+
+### --system-prompt
 
 ```bash
 ./chatdelta --system-prompt "You are a senior Rust engineer. Be concise." \
   "What are the trade-offs between Arc and Rc?"
 ```
 
-System prompts also work in conversation mode:
+Works in conversation mode too — see below.
 
-```bash
-./chatdelta --conversation \
-  --system-prompt "You are a helpful coding assistant. Respond only in Python examples."
-```
+### --stream
 
-## Streaming
-
-Use `--stream` with `--only` to print tokens as they arrive instead of waiting for a complete response:
+Stream tokens from a single model as they arrive:
 
 ```bash
 ./chatdelta --stream --only claude "Explain monads in plain English."
-./chatdelta --stream --only gpt "Write a quicksort in Rust."
 ```
 
-`--stream` requires exactly one model. If multiple models are selected, the CLI falls back to parallel mode and prints a warning.
+If multiple models are selected, `--stream` falls back to parallel mode with a warning. When `--stream` and `--show-usage` are both set, streaming is skipped in favour of a metadata-bearing response so the usage table can be shown.
 
 ## Conversation Mode
 
-Start an interactive multi-turn session with `--conversation` (`-c`):
+Start an interactive multi-turn session:
 
 ```bash
-./chatdelta --conversation
+./chatdelta --conversation           # or -c
 ./chatdelta -c --system-prompt "You are a Socratic tutor."
 ```
-
-Commands available during a session:
 
 | Command | Action |
 |---------|--------|
@@ -105,52 +99,28 @@ Commands available during a session:
 | `clear` | Reset conversation history |
 | `exit` / `quit` | End the session (auto-saves if `--save-conversation` is set) |
 
-Save and resume sessions across runs:
+Save and resume across runs:
 
 ```bash
-# Start a session and save it
 ./chatdelta -c --save-conversation session.json
-
-# Resume later
 ./chatdelta -c --load-conversation session.json --save-conversation session.json
 ```
 
 ## Debate Mode
 
-Debate Mode runs a structured deliberation between two AI models on a proposition, then brings in a third model as a moderator to evaluate the exchange.
-
-```
-chatdelta debate --model-a <provider:model> --model-b <provider:model> --prompt "<proposition>"
-```
-
-Models are specified as `provider:model`. Supported providers: `openai`, `anthropic` (or `claude`), `google` (or `gemini`).
-
-### How it works
-
-1. **Model A** gives an opening statement on the proposition.
-2. **Model B** responds, engaging directly with Model A's arguments.
-3. Each rebuttal round (controlled by `--rounds`) alternates between Model A and Model B.
-4. The **Moderator** analyzes the full transcript and produces a structured report covering:
-   - Strongest point from each side
-   - Shared conclusions
-   - Unresolved disagreements
-   - Factual claims that should be independently verified
-   - Final takeaway and confidence level
-
-The moderator is a referee and synthesizer, not a participant. If `--moderator` is omitted, one is auto-detected from your available API keys (preference order: Gemini → Claude → OpenAI).
-
-### Example
+Run a structured deliberation between two models on a proposition. A third model acts as moderator and produces a report covering the strongest point from each side, shared conclusions, unresolved disagreements, and factual claims worth verifying.
 
 ```bash
 chatdelta debate \
   --model-a openai:gpt-4o \
   --model-b anthropic:claude-sonnet-4-6 \
   --moderator google:gemini-2.5-flash \
-  --rounds 1 \
   --prompt "Microservices architecture improves long-term maintainability for most teams."
 ```
 
-Pipe a proposition from a file:
+Models are specified as `provider:model`. Supported providers: `openai`, `anthropic` / `claude`, `google` / `gemini`. If `--moderator` is omitted, one is auto-selected from your available keys (Gemini → Claude → OpenAI).
+
+Pipe from a file and export the full transcript:
 
 ```bash
 cat proposition.txt | chatdelta debate \
@@ -160,7 +130,7 @@ cat proposition.txt | chatdelta debate \
   --export debate-output.md
 ```
 
-The `deliberate` command is an alias for `debate`.
+`deliberate` is an alias for `debate`. Note: `--stream`, `--system-prompt`, `--show-usage`, and other top-level query flags do not apply to `debate`; use the debate-specific flags below.
 
 ### Debate flags
 
@@ -168,35 +138,26 @@ The `deliberate` command is an alias for `debate`.
 |------|---------|-------------|
 | `--model-a` | required | Model A: `provider:model` |
 | `--model-b` | required | Model B: `provider:model` |
-| `--moderator` | auto | Moderator model: `provider:model` |
-| `--prompt` | required | Proposition text (or use `--prompt-file`, or pipe via stdin) |
-| `--rounds` | `1` | Number of rebuttal pairs after the opening exchange |
-| `--protocol` | `moderated-debate` | Debate protocol |
-| `--export` | — | Write full transcript + report to a markdown file |
+| `--moderator` | auto | Moderator: `provider:model` |
+| `--prompt` | required | Proposition text (or `--prompt-file`, or pipe via stdin) |
+| `--rounds` | `1` | Rebuttal pairs after the opening exchange |
+| `--export` | — | Write transcript + moderator report to a markdown file |
 | `--max-turn-chars` | `2000` | Character guideline per turn |
 | `--quiet` | — | Suppress progress output |
 
 ## Development
 
-The project contains integration tests in `src/main.rs`. Run them with:
-
 ```bash
 cargo test
+cargo test test_args_parsing    # run a single test
 ```
 
-To run a single test:
-
-```bash
-cargo test test_args_parsing
-```
-
-Tests use `chatdelta v0.8` from crates.io. The `mock` feature is enabled via `[dev-dependencies]` so no live API keys are needed to run the test suite.
+Tests use `chatdelta v0.8.2` from crates.io. The `mock` feature is enabled in `[dev-dependencies]` so no live API keys are needed to run the suite.
 
 ## Contributing
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-This project adheres to our [Code of Conduct](CODE_OF_CONDUCT.md). By participating you agree to uphold it.
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. This project follows our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
