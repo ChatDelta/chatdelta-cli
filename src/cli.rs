@@ -126,6 +126,10 @@ pub struct Args {
     #[arg(long)]
     pub system_prompt: Option<String>,
 
+    /// Stream response tokens as they arrive (single-model only; use --only to select one)
+    #[arg(long)]
+    pub stream: bool,
+
     /// Load conversation history from file
     #[arg(long)]
     pub load_conversation: Option<PathBuf>,

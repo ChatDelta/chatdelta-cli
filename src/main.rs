@@ -4,7 +4,7 @@
 
 use chatdelta::{
     create_client, execute_parallel, generate_summary, AiClient, ChatSession, ClientConfig,
-    RetryStrategy,
+    RetryStrategy, StreamChunk,
 };
 use clap::Parser;
 use std::env;
@@ -12,6 +12,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 mod cli;
 mod debate;
@@ -67,7 +68,7 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         return run_conversation_mode(&args).await;
     }
 
-    // Create client configuration using the builder pattern from chatdelta 0.3.0
+    // Create client configuration using the builder pattern
     let mut config_builder = ClientConfig::builder()
         .timeout(Duration::from_secs(args.timeout))
         .retries(args.retries)
@@ -77,19 +78,17 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         config_builder = config_builder.temperature(temp);
     }
 
-    // Set retry strategy based on CLI argument (new in 0.3.0)
+    // Set retry strategy
     let retry_strategy = match args.retry_strategy.as_str() {
         "linear" => RetryStrategy::Linear(Duration::from_secs(1)),
         "fixed" => RetryStrategy::Fixed(Duration::from_secs(2)),
-        _ => RetryStrategy::Exponential(Duration::from_secs(1)), // default with base delay
+        _ => RetryStrategy::Exponential(Duration::from_secs(1)),
     };
     config_builder = config_builder.retry_strategy(retry_strategy);
 
-    // Add system prompt if provided (checking if this is supported in 0.3.0)
-    if let Some(ref _system_prompt) = args.system_prompt {
-        // Try to set system prompt if the method exists
-        // config_builder = config_builder.system_prompt(system_prompt);
-        // TODO: Use system prompt when API supports it
+    // Wire up system prompt (available since chatdelta 0.4.0)
+    if let Some(ref system_prompt) = args.system_prompt {
+        config_builder = config_builder.system_message(system_prompt);
     }
 
     let config = config_builder.build();
@@ -154,6 +153,35 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // Streaming path: single-model only, prints tokens as they arrive
+    if args.stream {
+        if clients.len() > 1 && !args.quiet {
+            eprintln!(
+                "Note: --stream requires a single model. Use --only to select one. \
+                 Falling back to parallel mode."
+            );
+        } else if clients.len() == 1 {
+            let client = clients.remove(0);
+            let prompt = args.prompt.as_ref().ok_or("No prompt provided")?.clone();
+            let (tx, mut rx) = mpsc::unbounded_channel::<StreamChunk>();
+            tokio::spawn(async move {
+                if let Err(e) = client.send_prompt_streaming(&prompt, tx).await {
+                    eprintln!("Stream error: {}", e);
+                }
+            });
+            use std::io::Write;
+            while let Some(chunk) = rx.recv().await {
+                print!("{}", chunk.content);
+                io::stdout().flush().ok();
+                if chunk.finished {
+                    println!();
+                    break;
+                }
+            }
+            return Ok(());
+        }
+    }
+
     // Initialize comprehensive logger
     let mut logger = if args.log_metrics || args.log_errors || args.log_dir.is_some() {
         Some(Logger::new(&args)?)
@@ -164,7 +192,7 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
     // Query each model with the same prompt in parallel
     if !args.quiet && args.progress {
         println!(
-            "🔄 Querying {} AI model{}...",
+            "\u{1f504} Querying {} AI model{}...",
             clients.len(),
             if clients.len() == 1 { "" } else { "s" }
         );
@@ -185,7 +213,7 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         } else {
             prompt.clone()
         };
-        println!("📝 Prompt: {}", preview);
+        println!("\u{1f4dd} Prompt: {}", preview);
     }
 
     // Start logging interaction
@@ -203,7 +231,7 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         match result {
             Ok(reply) => {
                 if args.verbose {
-                    println!("✅ Received response from {} ({} chars)", name, reply.len());
+                    println!("\u{2705} Received response from {} ({} chars)", name, reply.len());
                 }
 
                 // Save individual response if requested
@@ -220,7 +248,17 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => {
                 if !args.quiet {
-                    eprintln!("✗ {} error: {}", name, e);
+                    // Provide actionable error messages based on common patterns
+                    let msg = e.to_string();
+                    if msg.contains("401") || msg.contains("Unauthorized") || msg.contains("invalid_api_key") {
+                        eprintln!("\u{2717} {} error: Invalid API key — check your environment variables", name);
+                    } else if msg.contains("429") || msg.contains("rate") || msg.contains("RateLimit") {
+                        eprintln!("\u{2717} {} error: Rate limit exceeded — retry after a moment", name);
+                    } else if msg.contains("timeout") || msg.contains("Timeout") {
+                        eprintln!("\u{2717} {} error: Request timed out — try --timeout with a higher value", name);
+                    } else {
+                        eprintln!("\u{2717} {} error: {}", name, e);
+                    }
                 }
 
                 // Log error
@@ -238,7 +276,7 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     if !args.quiet {
         println!(
-            "✓ Received {} response{}",
+            "\u{2713} Received {} response{}",
             responses.len(),
             if responses.len() == 1 { "" } else { "s" }
         );
@@ -270,7 +308,7 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 Ok(summary) => {
                     let duration = summary_start.elapsed();
                     if !args.quiet {
-                        println!("✓ Summary generated");
+                        println!("\u{2713} Summary generated");
                     }
 
                     // Log summary
@@ -320,7 +358,7 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         if !args.quiet && (args.log_metrics || args.log_errors || args.log_dir.is_some()) {
             if let Ok(stats) = logger.get_log_stats() {
                 println!(
-                    "✓ Logged to structured logs ({} files, {})",
+                    "\u{2713} Logged to structured logs ({} files, {})",
                     stats.total_files,
                     stats.size_human_readable()
                 );
@@ -346,36 +384,35 @@ fn save_individual_response(
 
 /// Print available models
 fn print_available_models() {
-    println!("🤖 Available AI Models\n");
+    println!("\u{1f916} Available AI Models\n");
     println!("OpenAI:");
-    println!("  • gpt-5.4         (flagship reasoning — most capable)");
-    println!("  • o3              (strong reasoning, complex tasks)");
-    println!("  • gpt-4o          (fast, highly capable — default)");
-    println!("  • gpt-4o-mini     (faster, cheaper)\n");
+    println!("  \u{2022} gpt-5.4         (flagship reasoning \u{2014} most capable)");
+    println!("  \u{2022} o3              (strong reasoning, complex tasks)");
+    println!("  \u{2022} gpt-4o          (fast, highly capable \u{2014} default)");
+    println!("  \u{2022} gpt-4o-mini     (faster, cheaper)\n");
 
     println!("Google Gemini:");
-    println!("  • gemini-3.1-pro        (most capable, reasoning-first)");
-    println!("  • gemini-2.5-flash      (fast, cost-efficient — default)");
-    println!("  • gemini-2.5-flash-lite (fastest, highest throughput)\n");
+    println!("  \u{2022} gemini-3.1-pro        (most capable, reasoning-first)");
+    println!("  \u{2022} gemini-2.5-flash      (fast, cost-efficient \u{2014} default)");
+    println!("  \u{2022} gemini-2.5-flash-lite (fastest, highest throughput)\n");
 
     println!("Anthropic Claude:");
-    println!("  • claude-opus-4-6              (most capable)");
-    println!("  • claude-sonnet-4-6            (balanced — default)");
-    println!("  • claude-haiku-4-5-20251001    (fast, lightweight)\n");
+    println!("  \u{2022} claude-opus-4-6              (most capable)");
+    println!("  \u{2022} claude-sonnet-4-6            (balanced \u{2014} default)");
+    println!("  \u{2022} claude-haiku-4-5-20251001    (fast, lightweight)\n");
 
-    println!("💡 Set your preferred models with:");
+    println!("\u{1f4a1} Set your preferred models with:");
     println!("   --gpt-model, --gemini-model, --claude-model");
 }
 
 /// Check API key configuration and provide setup guidance
 fn run_doctor(_args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    println!("🏥 ChatDelta Doctor - API Key Configuration Check\n");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    println!("\u{1f3e5} ChatDelta Doctor - API Key Configuration Check\n");
+    println!("\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\n");
 
     let mut all_configured = true;
     let mut configured_count = 0;
 
-    // Check OpenAI API Key (check both OPENAI_API_KEY and CHATGPT_API_KEY)
     let openai_key = env::var("OPENAI_API_KEY")
         .or_else(|_| env::var("CHATGPT_API_KEY"));
 
@@ -387,42 +424,40 @@ fn run_doctor(_args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     "CHATGPT_API_KEY"
                 };
-                println!("✓ OpenAI API Key: Configured ({})", var_name);
+                println!("\u{2713} OpenAI API Key: Configured ({})", var_name);
                 configured_count += 1;
             } else {
-                println!("✗ OpenAI API Key: Empty");
+                println!("\u{2717} OpenAI API Key: Empty");
                 all_configured = false;
             }
         }
         Err(_) => {
-            println!("✗ OpenAI API Key: Not found");
-            println!("  → Get your API key at: https://platform.openai.com/api-keys");
-            println!("  → Set it with: export OPENAI_API_KEY=your-key-here");
-            println!("  → Or: export CHATGPT_API_KEY=your-key-here\n");
+            println!("\u{2717} OpenAI API Key: Not found");
+            println!("  \u{2192} Get your API key at: https://platform.openai.com/api-keys");
+            println!("  \u{2192} Set it with: export OPENAI_API_KEY=your-key-here");
+            println!("  \u{2192} Or: export CHATGPT_API_KEY=your-key-here\n");
             all_configured = false;
         }
     }
 
-    // Check Gemini API Key
     match env::var("GEMINI_API_KEY") {
         Ok(key) => {
             if !key.is_empty() {
-                println!("✓ Gemini API Key: Configured");
+                println!("\u{2713} Gemini API Key: Configured");
                 configured_count += 1;
             } else {
-                println!("✗ Gemini API Key: Empty");
+                println!("\u{2717} Gemini API Key: Empty");
                 all_configured = false;
             }
         }
         Err(_) => {
-            println!("✗ Gemini API Key: Not found");
-            println!("  → Get your API key at: https://makersuite.google.com/app/apikey");
-            println!("  → Set it with: export GEMINI_API_KEY=your-key-here\n");
+            println!("\u{2717} Gemini API Key: Not found");
+            println!("  \u{2192} Get your API key at: https://makersuite.google.com/app/apikey");
+            println!("  \u{2192} Set it with: export GEMINI_API_KEY=your-key-here\n");
             all_configured = false;
         }
     }
 
-    // Check Anthropic API Key (check both ANTHROPIC_API_KEY and CLAUDE_API_KEY)
     let anthropic_key = env::var("ANTHROPIC_API_KEY")
         .or_else(|_| env::var("CLAUDE_API_KEY"));
 
@@ -434,36 +469,33 @@ fn run_doctor(_args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     "CLAUDE_API_KEY"
                 };
-                println!("✓ Anthropic API Key: Configured ({})", var_name);
+                println!("\u{2713} Anthropic API Key: Configured ({})", var_name);
                 configured_count += 1;
             } else {
-                println!("✗ Anthropic API Key: Empty");
+                println!("\u{2717} Anthropic API Key: Empty");
                 all_configured = false;
             }
         }
         Err(_) => {
-            println!("✗ Anthropic API Key: Not found");
-            println!("  → Get your API key at: https://console.anthropic.com/settings/keys");
-            println!("  → Set it with: export ANTHROPIC_API_KEY=your-key-here");
-            println!("  → Or: export CLAUDE_API_KEY=your-key-here\n");
+            println!("\u{2717} Anthropic API Key: Not found");
+            println!("  \u{2192} Get your API key at: https://console.anthropic.com/settings/keys");
+            println!("  \u{2192} Set it with: export ANTHROPIC_API_KEY=your-key-here");
+            println!("  \u{2192} Or: export CLAUDE_API_KEY=your-key-here\n");
             all_configured = false;
         }
     }
 
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!(
-        "📊 Summary: {}/3 API keys configured",
-        configured_count
-    );
+    println!("\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}");
+    println!("\u{1f4ca} Summary: {}/3 API keys configured", configured_count);
 
     if all_configured {
-        println!("\n✓ All API keys are configured! You're ready to use ChatDelta.");
+        println!("\n\u{2713} All API keys are configured! You're ready to use ChatDelta.");
         println!("  Run 'chatdelta --test' to verify API connections.");
     } else if configured_count > 0 {
-        println!("\n⚠️  Some API keys are missing. ChatDelta will work with configured providers.");
+        println!("\n\u{26a0}\u{fe0f}  Some API keys are missing. ChatDelta will work with configured providers.");
         println!("  You need at least one API key to use ChatDelta.");
     } else {
-        println!("\n✗ No API keys configured. Please set up at least one API key to use ChatDelta.");
+        println!("\n\u{2717} No API keys configured. Please set up at least one API key to use ChatDelta.");
         return Err("No API keys configured".into());
     }
 
@@ -474,11 +506,15 @@ fn run_doctor(_args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let mut config_builder = ClientConfig::builder()
         .timeout(Duration::from_secs(args.timeout))
-        .retries(0) // No retries for tests
+        .retries(0)
         .max_tokens(args.max_tokens);
 
     if let Some(temp) = args.temperature {
         config_builder = config_builder.temperature(temp);
+    }
+
+    if let Some(ref system_prompt) = args.system_prompt {
+        config_builder = config_builder.system_message(system_prompt);
     }
 
     let config = config_builder.build();
@@ -493,19 +529,19 @@ async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         match openai_key {
             Ok(key) => match create_client("openai", &key, &args.gpt_model, config.clone()) {
                 Ok(client) => match client.send_prompt(test_prompt).await {
-                    Ok(_) => println!("✓ ChatGPT connection successful"),
+                    Ok(_) => println!("\u{2713} ChatGPT connection successful"),
                     Err(e) => {
-                        println!("✗ ChatGPT connection failed: {}", e);
+                        println!("\u{2717} ChatGPT connection failed: {}", e);
                         all_passed = false;
                     }
                 },
                 Err(e) => {
-                    println!("✗ ChatGPT client creation failed: {}", e);
+                    println!("\u{2717} ChatGPT client creation failed: {}", e);
                     all_passed = false;
                 }
             },
             Err(_) => {
-                println!("✗ ChatGPT: OPENAI_API_KEY or CHATGPT_API_KEY not set");
+                println!("\u{2717} ChatGPT: OPENAI_API_KEY or CHATGPT_API_KEY not set");
                 all_passed = false;
             }
         }
@@ -515,19 +551,19 @@ async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         match env::var("GEMINI_API_KEY") {
             Ok(key) => match create_client("gemini", &key, &args.gemini_model, config.clone()) {
                 Ok(client) => match client.send_prompt(test_prompt).await {
-                    Ok(_) => println!("✓ Gemini connection successful"),
+                    Ok(_) => println!("\u{2713} Gemini connection successful"),
                     Err(e) => {
-                        println!("✗ Gemini connection failed: {}", e);
+                        println!("\u{2717} Gemini connection failed: {}", e);
                         all_passed = false;
                     }
                 },
                 Err(e) => {
-                    println!("✗ Gemini client creation failed: {}", e);
+                    println!("\u{2717} Gemini client creation failed: {}", e);
                     all_passed = false;
                 }
             },
             Err(_) => {
-                println!("✗ Gemini: GEMINI_API_KEY not set");
+                println!("\u{2717} Gemini: GEMINI_API_KEY not set");
                 all_passed = false;
             }
         }
@@ -540,26 +576,26 @@ async fn test_connections(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         match anthropic_key {
             Ok(key) => match create_client("claude", &key, &args.claude_model, config.clone()) {
                 Ok(client) => match client.send_prompt(test_prompt).await {
-                    Ok(_) => println!("✓ Claude connection successful"),
+                    Ok(_) => println!("\u{2713} Claude connection successful"),
                     Err(e) => {
-                        println!("✗ Claude connection failed: {}", e);
+                        println!("\u{2717} Claude connection failed: {}", e);
                         all_passed = false;
                     }
                 },
                 Err(e) => {
-                    println!("✗ Claude client creation failed: {}", e);
+                    println!("\u{2717} Claude client creation failed: {}", e);
                     all_passed = false;
                 }
             },
             Err(_) => {
-                println!("✗ Claude: ANTHROPIC_API_KEY or CLAUDE_API_KEY not set");
+                println!("\u{2717} Claude: ANTHROPIC_API_KEY or CLAUDE_API_KEY not set");
                 all_passed = false;
             }
         }
     }
 
     if all_passed {
-        println!("\n✓ All API connections working properly");
+        println!("\n\u{2713} All API connections working properly");
         Ok(())
     } else {
         Err("Some API connections failed".into())
@@ -620,7 +656,6 @@ async fn run_debate(args: DebateArgs) -> Result<(), Box<dyn std::error::Error>> 
         }
         s
     } else {
-        // Try piped stdin
         use std::io::IsTerminal;
         if !io::stdin().is_terminal() {
             let mut buf = String::new();
@@ -718,13 +753,13 @@ async fn run_debate(args: DebateArgs) -> Result<(), Box<dyn std::error::Error>> 
 async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
 
-    println!("🗨️  ChatDelta Conversation Mode");
+    println!("\u{1f5e8}\u{fe0f}  ChatDelta Conversation Mode");
     println!("Type 'exit' or 'quit' to end the conversation");
     println!("Type 'clear' to reset the conversation history");
     println!("Type 'save' to save the conversation to a file");
     println!();
 
-    // Create client configuration with retry strategy
+    // Create client configuration with system_message and retry strategy
     let mut config_builder = ClientConfig::builder()
         .timeout(Duration::from_secs(args.timeout))
         .retries(args.retries)
@@ -734,13 +769,20 @@ async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
         config_builder = config_builder.temperature(temp);
     }
 
-    // Set retry strategy
     let retry_strategy = match args.retry_strategy.as_str() {
         "linear" => RetryStrategy::Linear(Duration::from_secs(1)),
         "fixed" => RetryStrategy::Fixed(Duration::from_secs(2)),
         _ => RetryStrategy::Exponential(Duration::from_secs(1)),
     };
     config_builder = config_builder.retry_strategy(retry_strategy);
+
+    // Wire up system prompt into ClientConfig (available since chatdelta 0.4.0)
+    if let Some(ref system_prompt) = args.system_prompt {
+        config_builder = config_builder.system_message(system_prompt);
+        if !args.quiet {
+            println!("\u{1f4cb} System prompt active");
+        }
+    }
 
     let config = config_builder.build();
 
@@ -782,15 +824,8 @@ async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
     // Load conversation history if specified
     if let Some(ref path) = args.load_conversation {
         let _history = fs::read_to_string(path)?;
-        // TODO: Parse and load history (this would need a proper format)
-        println!("📁 Loaded conversation from: {}", path.display());
-    }
-
-    // Add system prompt if provided
-    if let Some(ref system_prompt) = args.system_prompt {
-        // Note: This depends on what methods ChatSession actually provides
-        // session.set_system_prompt(system_prompt);
-        println!("📋 System prompt set: {}", system_prompt);
+        // TODO: Parse and load history once ChatSession exposes load_history()
+        println!("\u{1f4c1} Loaded conversation from: {}", path.display());
     }
 
     // Main conversation loop
@@ -802,25 +837,22 @@ async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
         io::stdin().read_line(&mut input)?;
         let input = input.trim();
 
-        // Handle special commands
         match input.to_lowercase().as_str() {
             "exit" | "quit" => {
-                println!("👋 Goodbye!");
+                println!("\u{1f44b} Goodbye!");
                 break;
             }
             "clear" => {
-                // Reset conversation - create a new session with the same client
-                // Note: We can't extract the client from session, so we need to recreate it
-                println!("🔄 Conversation cleared (restart required for now)");
+                // TODO: Use ChatSession::clear() once available in chatdelta-rs
+                println!("\u{1f504} Conversation cleared (restart required until ChatSession::clear() is available)");
                 continue;
             }
             "save" => {
-                // Save conversation
                 if let Some(ref path) = args.save_conversation {
-                    // TODO: Implement saving logic
-                    println!("💾 Conversation saved to: {}", path.display());
+                    // TODO: Use ChatSession::get_history() once available in chatdelta-rs
+                    println!("\u{1f4be} Conversation saved to: {}", path.display());
                 } else {
-                    println!("⚠️  No save path specified. Use --save-conversation <path>");
+                    println!("\u{26a0}\u{fe0f}  No save path specified. Use --save-conversation <path>");
                 }
                 continue;
             }
@@ -828,24 +860,22 @@ async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
             _ => {}
         }
 
-        // Send message and get response
-        println!("🤔 Thinking...");
+        println!("\u{1f914} Thinking...");
 
-        // ChatSession takes a single message and maintains history internally
         match session.send(input).await {
             Ok(response) => {
                 println!("\n{}\n", response);
             }
             Err(e) => {
-                eprintln!("❌ Error: {}", e);
+                eprintln!("\u{274c} Error: {}", e);
             }
         }
     }
 
     // Save conversation on exit if requested
     if let Some(ref path) = args.save_conversation {
-        // TODO: Implement saving logic
-        println!("💾 Conversation saved to: {}", path.display());
+        // TODO: Use ChatSession::get_history() once available in chatdelta-rs
+        println!("\u{1f4be} Conversation saved to: {}", path.display());
     }
 
     Ok(())
@@ -901,7 +931,6 @@ mod tests {
         .expect("Should parse debate arguments");
 
         assert!(args.command.is_some());
-        // validate() on Args should pass when subcommand is present
         args.validate().expect("Should pass with subcommand");
     }
 
@@ -929,5 +958,13 @@ mod tests {
             ..valid.clone()
         };
         assert!(too_many_rounds.validate().is_err());
+    }
+
+    #[test]
+    fn test_stream_flag_parsing() {
+        let args = Args::try_parse_from(["chatdelta", "--stream", "--only", "claude", "Hello"])
+            .expect("Should parse stream flag");
+        assert!(args.stream);
+        assert_eq!(args.only, vec!["claude"]);
     }
 }
