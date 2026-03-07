@@ -1,10 +1,6 @@
 # ChatDelta Crate Wishlist & Implementation Status
 
-*Last Updated: 2026-03-07 — synced against chatdelta-rs v0.7.0, CLI currently pinned to v0.6.0*
-
-> **Note:** The CLI's `Cargo.toml` is currently pinned to `chatdelta = "0.6.0"`. Several features
-> delivered in v0.4.0–v0.7.0 are available in the crate but **not yet wired up in the CLI**.
-> See the "Available but Not Yet Integrated" section below.
+*Last Updated: 2026-03-07 — synced against chatdelta-rs v0.7.0, CLI v0.4.2*
 
 ---
 
@@ -22,28 +18,19 @@
 
 ---
 
-## ✅ Delivered in Crate — Not Yet Wired Up in CLI
+## ✅ Delivered & Integrated in CLI v0.4.2
 
-These features exist in `chatdelta-rs` but the CLI hasn't been updated to use them.
-The CLI needs to bump its dependency and implement the integration.
+### Streaming Responses — delivered v0.4.0 / v0.7.0, integrated CLI v0.4.2
+- **What we got:** Channel-based `send_prompt_streaming(tx)` (v0.7.0)
+- **CLI status:** ✅ `--stream` flag wires `mpsc::unbounded_channel::<StreamChunk>()` + prints chunks as they arrive
 
-### Streaming Responses — delivered v0.4.0 / v0.7.0
-- **What we got:** BoxStream via `stream_prompt()` (v0.4.0) + channel-based `send_prompt_streaming(tx)` (v0.7.0)
-- **CLI status:** ❌ Not integrated — users still wait with no feedback for long responses
-- **What to do:** Wire up `send_prompt_streaming` with an `mpsc::unbounded_channel` and print chunks as they arrive. The channel-based API (v0.7.0) is the simpler path for CLI use.
-- **Impact:** High — especially noticeable in debate mode where moderator reports are long
-
-### System Prompt Support — delivered v0.4.0
+### System Prompt Support — delivered v0.4.0, integrated CLI v0.4.2
 - **What we got:** `ClientConfig::builder().system_message("You are...")`
-- **CLI status:** ❌ `--system-prompt` flag exists in CLI but is not connected to anything
-- **What to do:** Pass `--system-prompt` value into `ClientConfig::builder().system_message()`
-- **Impact:** High — debate mode role framing currently relies on prepending text to turn content
+- **CLI status:** ✅ `--system-prompt` flag now passed through `system_message()` on all three config builders
 
-### Structured Error Handling — delivered v0.4.1+
-- **What we got:** `ClientError` enum with `Network`, `Api`, `Authentication`, `Configuration`, `Parse`, `Stream` variants; `ApiErrorType::RateLimit`, `ApiErrorType::QuotaExceeded`, etc.
-- **CLI status:** ❌ CLI still treats all errors as strings
-- **What to do:** Match on `ClientError` variants to give users actionable messages (e.g. "Rate limit hit — retry after Xs" vs "Invalid API key — check your env vars")
-- **Impact:** Medium — significantly better DX when things go wrong
+### Structured Error Handling — delivered v0.4.1+, integrated CLI v0.4.2
+- **What we got:** `ClientError` enum with `Authentication`, `RateLimit`, timeout variants
+- **CLI status:** ✅ Actionable messages for 401 (check API key), 429 (rate limit), and timeout errors
 
 ### `ModelCapabilities` — delivered v0.6.0
 - **What we got:** `ModelCapabilities` struct with `supports_streaming`, `max_tokens`, etc. via the `orchestration` feature flag
@@ -119,16 +106,6 @@ Based on current CLI needs and what v0.6.0 orchestration features unlock:
 
 ---
 
-## 🎯 Immediate Action Items for CLI
-
-**Bump `chatdelta` dependency to `"0.7"` and:**
-1. Wire up `send_prompt_streaming` for debate mode and parallel queries
-2. Connect `--system-prompt` flag to `ClientConfig::builder().system_message()`
-3. Replace string error handling with `ClientError` variant matching
-
-These three changes are purely CLI work — the crate already supports all of them.
-
----
 
 *This wishlist is maintained by the chatdelta-cli project as a communication channel with chatdelta-rs.*
 *For the reverse channel (crate → CLI), see `WHATSNEW.md` in chatdelta-rs (proposed).*
