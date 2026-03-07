@@ -4,13 +4,20 @@ Query OpenAI, Gemini, and Claude in parallel and compare their responses — fro
 
 ## Installation
 
-Requires a recent stable Rust toolchain:
+**From crates.io (recommended):**
 
 ```bash
-cargo build --release
+cargo install chatdelta-cli
 ```
 
-The binary lands at `target/release/chatdelta`.
+**From source:**
+
+```bash
+git clone https://github.com/ChatDelta/chatdelta-cli
+cd chatdelta-cli
+cargo build --release
+# binary at target/release/chatdelta
+```
 
 ## Setup
 
