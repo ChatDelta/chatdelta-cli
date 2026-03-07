@@ -1,6 +1,6 @@
 [package]
 name = "chatdelta-cli"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 description = "Command-line interface for ChatDelta - a unified tool for querying multiple AI APIs"
 license = "MIT"
@@ -13,10 +13,10 @@ name = "chatdelta"
 path = "src/main.rs"
 
 [dependencies]
-chatdelta = "0.8"
+chatdelta = "0.8.2"
 
 [dev-dependencies]
-chatdelta = { version = "0.8", features = ["mock"] }
+chatdelta = { version = "0.8.2", features = ["mock"] }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

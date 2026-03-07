@@ -3,8 +3,8 @@
 //! A command-line tool for querying multiple AI APIs and summarizing their responses.
 
 use chatdelta::{
-    create_client, execute_parallel, generate_summary, AiClient, ChatSession, ClientConfig,
-    Message, RetryStrategy, StreamChunk,
+    create_client, execute_parallel, execute_parallel_with_metadata, generate_summary, AiClient,
+    ChatSession, ClientConfig, Message, RetryStrategy, StreamChunk,
 };
 use clap::Parser;
 use std::env;
@@ -163,19 +163,28 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         } else if clients.len() == 1 {
             let client = clients.remove(0);
             let prompt = args.prompt.as_ref().ok_or("No prompt provided")?.clone();
-            let (tx, mut rx) = mpsc::unbounded_channel::<StreamChunk>();
-            tokio::spawn(async move {
-                if let Err(e) = client.send_prompt_streaming(&prompt, tx).await {
-                    eprintln!("Stream error: {}", e);
-                }
-            });
-            use std::io::Write;
-            while let Some(chunk) = rx.recv().await {
-                print!("{}", chunk.content);
-                io::stdout().flush().ok();
-                if chunk.finished {
-                    println!();
-                    break;
+
+            if args.show_usage {
+                // Streaming doesn't return metadata; use send_prompt_with_metadata instead
+                let name = client.name().to_string();
+                let response = client.send_prompt_with_metadata(&prompt).await?;
+                println!("{}", response.content);
+                print_usage_table(&[(name, response.metadata.total_tokens, response.metadata.latency_ms)]);
+            } else {
+                let (tx, mut rx) = mpsc::unbounded_channel::<StreamChunk>();
+                tokio::spawn(async move {
+                    if let Err(e) = client.send_prompt_streaming(&prompt, tx).await {
+                        eprintln!("Stream error: {}", e);
+                    }
+                });
+                use std::io::Write;
+                while let Some(chunk) = rx.recv().await {
+                    print!("{}", chunk.content);
+                    io::stdout().flush().ok();
+                    if chunk.finished {
+                        println!();
+                        break;
+                    }
                 }
             }
             return Ok(());
@@ -222,7 +231,23 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let query_start = std::time::Instant::now();
-    let results = execute_parallel(clients, prompt).await;
+    let (results, usage_rows) = if args.show_usage {
+        let raw = execute_parallel_with_metadata(clients, prompt).await;
+        let mut plain: Vec<(String, Result<String, _>)> = Vec::new();
+        let mut usage: Vec<(String, Option<u32>, Option<u64>)> = Vec::new();
+        for (name, result) in raw {
+            match result {
+                Ok(r) => {
+                    usage.push((name.clone(), r.metadata.total_tokens, r.metadata.latency_ms));
+                    plain.push((name, Ok(r.content)));
+                }
+                Err(e) => plain.push((name, Err(e))),
+            }
+        }
+        (plain, usage)
+    } else {
+        (execute_parallel(clients, prompt).await, Vec::new())
+    };
     let query_duration = query_start.elapsed();
 
     let mut responses = Vec::new();
@@ -348,6 +373,11 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         output_results(&args, &responses, digest.as_deref())?;
     }
 
+    // Show token usage table if requested
+    if !usage_rows.is_empty() {
+        print_usage_table(&usage_rows);
+    }
+
     // Log interaction if requested (legacy simple logging)
     log_interaction(&args, &responses, digest.as_deref())?;
 
@@ -380,6 +410,18 @@ fn save_individual_response(
     let path = dir.join(filename);
     fs::write(&path, response)?;
     Ok(())
+}
+
+/// Print a token-usage / latency table for --show-usage
+fn print_usage_table(rows: &[(String, Option<u32>, Option<u64>)]) {
+    println!("\n{:<20} {:>8}  {:>10}", "Model", "Tokens", "Latency");
+    println!("{}", "─".repeat(42));
+    for (name, tokens, latency_ms) in rows {
+        let tok = tokens.map_or_else(|| "—".to_string(), |t| t.to_string());
+        let lat = latency_ms.map_or_else(|| "—".to_string(), |ms| format!("{}ms", ms));
+        println!("{:<20} {:>8}  {:>10}", name, tok, lat);
+    }
+    println!();
 }
 
 /// Print available models
@@ -980,6 +1022,61 @@ mod tests {
             .expect("Should parse stream flag");
         assert!(args.stream);
         assert_eq!(args.only, vec!["claude"]);
+    }
+
+    #[test]
+    fn test_show_usage_flag_parsing() {
+        let args = Args::try_parse_from(["chatdelta", "--show-usage", "How fast is Rust?"])
+            .expect("Should parse --show-usage");
+        assert!(args.show_usage);
+        args.validate().expect("Should pass validation");
+    }
+
+    /// Verifies that print_usage_table handles None metadata gracefully.
+    #[test]
+    fn test_print_usage_table_none_metadata() {
+        // Rows with no metadata (as returned by MockClient's default send_prompt_with_metadata)
+        let rows: Vec<(String, Option<u32>, Option<u64>)> = vec![
+            ("ChatGPT".to_string(), Some(512), Some(1200)),
+            ("Claude".to_string(), None, None),
+        ];
+        // Just verify it doesn't panic
+        print_usage_table(&rows);
+    }
+
+    /// Uses MockClient to exercise the execute_parallel_with_metadata code path
+    /// end-to-end: metadata is extracted and the usage_rows vec is populated.
+    #[tokio::test]
+    async fn test_usage_rows_built_from_metadata() {
+        use chatdelta::{execute_parallel_with_metadata, MockClient};
+
+        let clients: Vec<Box<dyn AiClient>> = vec![
+            Box::new(MockClient::new("gpt", vec![Ok("answer A".to_string())])),
+            Box::new(MockClient::new("claude", vec![Ok("answer B".to_string())])),
+        ];
+
+        let raw = execute_parallel_with_metadata(clients, "test prompt").await;
+        assert_eq!(raw.len(), 2);
+
+        let mut plain = Vec::new();
+        let mut usage_rows: Vec<(String, Option<u32>, Option<u64>)> = Vec::new();
+        for (name, result) in raw {
+            match result {
+                Ok(r) => {
+                    usage_rows.push((name.clone(), r.metadata.total_tokens, r.metadata.latency_ms));
+                    plain.push((name, r.content));
+                }
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+
+        assert_eq!(plain.len(), 2);
+        assert_eq!(usage_rows.len(), 2);
+        // MockClient returns empty metadata, so tokens/latency are None — verify no panic
+        for (_, tokens, latency) in &usage_rows {
+            let _ = tokens.map_or_else(|| "—".to_string(), |t| t.to_string());
+            let _ = latency.map_or_else(|| "—".to_string(), |ms| format!("{}ms", ms));
+        }
     }
 
     /// Tests conversation session lifecycle using MockClient — no live API keys required.

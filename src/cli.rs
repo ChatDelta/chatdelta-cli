@@ -114,6 +114,10 @@ pub struct Args {
     #[arg(long)]
     pub raw: bool,
 
+    /// Show token usage and latency per model after each query
+    #[arg(long)]
+    pub show_usage: bool,
+
     /// Retry strategy: exponential, linear, fixed
     #[arg(long, default_value = "exponential")]
     pub retry_strategy: String,
