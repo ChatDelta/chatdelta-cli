@@ -4,7 +4,7 @@
 
 use chatdelta::{
     create_client, execute_parallel, generate_summary, AiClient, ChatSession, ClientConfig,
-    RetryStrategy, StreamChunk,
+    Message, RetryStrategy, StreamChunk,
 };
 use clap::Parser;
 use std::env;
@@ -823,9 +823,15 @@ async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
 
     // Load conversation history if specified
     if let Some(ref path) = args.load_conversation {
-        let _history = fs::read_to_string(path)?;
-        // TODO: Parse and load history once ChatSession exposes load_history()
-        println!("\u{1f4c1} Loaded conversation from: {}", path.display());
+        let json = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read conversation file '{}': {}", path.display(), e))?;
+        let messages: Vec<Message> = serde_json::from_str(&json)
+            .map_err(|e| format!("Failed to parse conversation file '{}': {}", path.display(), e))?;
+        let count = messages.len();
+        session.load_history(messages);
+        if !args.quiet {
+            println!("\u{1f4c1} Loaded {} messages from: {}", count, path.display());
+        }
     }
 
     // Main conversation loop
@@ -843,13 +849,14 @@ async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
                 break;
             }
             "clear" => {
-                // TODO: Use ChatSession::clear() once available in chatdelta-rs
-                println!("\u{1f504} Conversation cleared (restart required until ChatSession::clear() is available)");
+                session.clear();
+                println!("\u{1f504} Conversation cleared");
                 continue;
             }
             "save" => {
                 if let Some(ref path) = args.save_conversation {
-                    // TODO: Use ChatSession::get_history() once available in chatdelta-rs
+                    let json = serde_json::to_string_pretty(&session.history().messages)?;
+                    fs::write(path, &json)?;
                     println!("\u{1f4be} Conversation saved to: {}", path.display());
                 } else {
                     println!("\u{26a0}\u{fe0f}  No save path specified. Use --save-conversation <path>");
@@ -874,8 +881,11 @@ async fn run_conversation_mode(args: &Args) -> Result<(), Box<dyn std::error::Er
 
     // Save conversation on exit if requested
     if let Some(ref path) = args.save_conversation {
-        // TODO: Use ChatSession::get_history() once available in chatdelta-rs
-        println!("\u{1f4be} Conversation saved to: {}", path.display());
+        let json = serde_json::to_string_pretty(&session.history().messages)?;
+        fs::write(path, &json)?;
+        if !args.quiet {
+            println!("\u{1f4be} Conversation saved to: {}", path.display());
+        }
     }
 
     Ok(())
@@ -903,6 +913,10 @@ mod tests {
         assert!(args.validate().is_err());
     }
 
+    // This test uses unsafe remove_var but doesn't clear alternative key names
+    // (CHATGPT_API_KEY, CLAUDE_API_KEY), so it makes real API calls when keys are
+    // present in the environment. Marked ignore; run manually with -- --ignored.
+    #[ignore = "unreliable when real API keys are present; use MockClient tests instead"]
     #[tokio::test]
     async fn test_run_missing_env_vars() {
         unsafe {
@@ -966,5 +980,54 @@ mod tests {
             .expect("Should parse stream flag");
         assert!(args.stream);
         assert_eq!(args.only, vec!["claude"]);
+    }
+
+    /// Tests conversation session lifecycle using MockClient — no live API keys required.
+    #[tokio::test]
+    async fn test_conversation_session_load_save_clear() {
+        use chatdelta::{ChatSession, Message, MockClient};
+
+        let mock = MockClient::new(
+            "mock",
+            vec![
+                Ok("The capital of France is Paris.".to_string()),
+                Ok("Rust was created by Graydon Hoare.".to_string()),
+            ],
+        );
+
+        let mut session = ChatSession::new(Box::new(mock));
+
+        // Simulate --load-conversation: deserialize JSON into Vec<Message> and call load_history
+        let prior: Vec<Message> = vec![
+            Message::user("Hi"),
+            Message::assistant("Hello! How can I help you?"),
+        ];
+        let serialized = serde_json::to_string(&prior).unwrap();
+        let loaded: Vec<Message> = serde_json::from_str(&serialized).unwrap();
+        session.load_history(loaded);
+
+        assert_eq!(session.history().messages.len(), 2);
+        assert_eq!(session.history().messages[0].role, "user");
+
+        // Send a message — history grows and mock response is consumed
+        let r1 = session.send("What is the capital of France?").await.unwrap();
+        assert_eq!(r1, "The capital of France is Paris.");
+        assert_eq!(session.history().messages.len(), 4);
+
+        // Simulate --save-conversation: serialize history to JSON and round-trip it
+        let saved_json = serde_json::to_string_pretty(&session.history().messages).unwrap();
+        let restored: Vec<Message> = serde_json::from_str(&saved_json).unwrap();
+        assert_eq!(restored.len(), 4);
+        assert_eq!(restored[3].role, "assistant");
+        assert_eq!(restored[3].content, "The capital of France is Paris.");
+
+        // 'clear' command resets history
+        session.clear();
+        assert!(session.history().messages.is_empty());
+
+        // Session is still usable after clear
+        let r2 = session.send("Who created Rust?").await.unwrap();
+        assert_eq!(r2, "Rust was created by Graydon Hoare.");
+        assert_eq!(session.history().messages.len(), 2);
     }
 }

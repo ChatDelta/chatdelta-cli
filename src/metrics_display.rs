@@ -81,7 +81,10 @@ impl CliMetrics {
         println!("📍 Session Duration: {}s", summary.duration_seconds);
         println!("📍 Total Requests: {}", summary.total_requests);
         println!("📍 Success Rate: {:.1}%", summary.success_rate);
-        println!("📍 Avg Latency: {}ms", summary.average_latency_ms);
+        let latency_str = summary.average_latency_ms
+            .map(|l| format!("{:.0}ms", l))
+            .unwrap_or_else(|| "N/A".to_string());
+        println!("📍 Avg Latency: {}", latency_str);
         
         if summary.total_tokens > 0 {
             println!("📍 Total Tokens: {}", summary.total_tokens);
@@ -93,7 +96,10 @@ impl CliMetrics {
                 println!("\n  {}:", provider);
                 println!("    • Requests: {} (Success: {:.1}%)", 
                     stats.requests_total, stats.success_rate);
-                println!("    • Avg Latency: {}ms", stats.average_latency_ms);
+                let latency = stats.average_latency_ms
+                    .map(|l| format!("{:.0}ms", l))
+                    .unwrap_or_else(|| "N/A".to_string());
+                println!("    • Avg Latency: {}", latency);
                 if stats.total_tokens_used > 0 {
                     println!("    • Tokens Used: {}", stats.total_tokens_used);
                 }
@@ -148,7 +154,7 @@ pub struct SessionSummary {
     pub duration_seconds: u64,
     pub total_requests: u64,
     pub success_rate: f64,
-    pub average_latency_ms: u64,
+    pub average_latency_ms: Option<f64>,
     pub total_tokens: u64,
     pub provider_stats: Vec<(String, MetricsSnapshot)>,
 }
